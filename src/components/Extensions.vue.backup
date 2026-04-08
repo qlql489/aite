@@ -1,0 +1,1959 @@
+<script setup lang="ts">
+import { ref, computed } from 'vue';
+import { useSlashesStore } from '../stores/slashes';
+import { useMcpStore, type McpServer, type McpPreset, MCP_PRESETS } from '../stores/mcp';
+import { HugeiconsIcon } from '@hugeicons/vue';
+import {
+  ServerStack01Icon,
+  Wifi01Icon,
+  GlobeIcon,
+  PlusSignIcon,
+  GridIcon,
+  Brackets,
+  Delete02Icon,
+  Edit01Icon,
+  CommandIcon,
+  ZapIcon,
+  Plug01Icon,
+  ToolsIcon,
+  RefreshIcon,
+  EyeIcon,
+  PaintBrushIcon,
+} from '@hugeicons/core-free-icons';
+
+// Tab 类型
+type TabType = 'command' | 'skill' | 'mcp' | 'plugin';
+
+// MCP Tab 内部 Tab
+type McpTab = 'list' | 'json';
+
+// 状态
+const activeTab = ref<TabType>('mcp');
+const slashesStore = useSlashesStore();
+const mcpStore = useMcpStore();
+
+// MCP Tab 状态
+const mcpTab = ref<McpTab>('list');
+const mcpJsonText = ref('');
+
+// 命令列表
+const commands = computed(() => {
+  return slashesStore.commandsByType.command || [];
+});
+
+// Skill 列表
+const skills = computed(() => {
+  return slashesStore.commandsByType.skill || [];
+});
+
+// MCP 服务器
+const mcpServers = computed(() => mcpStore.serverList);
+
+// Plugin 列表（模拟数据）
+const plugins = ref([
+  { id: 1, name: 'Git Integration', description: 'Git 版本控制集成', version: '1.0.0', enabled: true, icon: RefreshIcon },
+  { id: 2, name: 'File Watcher', description: '文件变化监控', version: '0.9.0', enabled: true, icon: EyeIcon },
+  { id: 3, name: 'Theme Manager', description: '主题管理器', version: '1.2.0', enabled: false, icon: PaintBrushIcon }
+]);
+
+// MCP 对话框状态
+const showMcpDialog = ref(false);
+const editingMcpServer = ref<McpServer | null>(null);
+const showPresetDialog = ref(false);
+const mcpEditMode = ref<'form' | 'json'>('form');
+const mcpJsonError = ref<string | null>(null);
+
+// MCP 表单数据
+const mcpForm = ref({
+  id: '',
+  name: '',
+  description: '',
+  serverType: 'stdio' as 'stdio' | 'http' | 'sse',
+  command: '',
+  args: '',
+  url: '',
+  env: '{}',
+  headers: '{}',
+});
+
+// Tab 配置
+const tabs = [
+  { id: 'command' as TabType, label: '命令', icon: CommandIcon },
+  { id: 'skill' as TabType, label: '技能', icon: ZapIcon },
+  { id: 'mcp' as TabType, label: 'MCP 服务', icon: Plug01Icon },
+  { id: 'plugin' as TabType, label: '插件', icon: ToolsIcon },
+];
+
+// 切换 Tab
+function switchTab(tab: TabType) {
+  activeTab.value = tab;
+  if (tab === 'command' || tab === 'skill') {
+    slashesStore.initBuiltinCommands();
+  } else if (tab === 'mcp') {
+    mcpStore.loadServers();
+    initMcpJsonConfig();
+  }
+}
+
+// 初始化 MCP JSON 文本
+function initMcpJsonText(server?: McpServer) {
+  if (server) {
+    const config: Record<string, unknown> = {};
+    if (server.server.type && server.server.type !== 'stdio') {
+      config.type = server.server.type;
+    }
+    if (server.server.command) {
+      config.command = server.server.command;
+    }
+    if (server.server.args && server.server.args.length > 0) {
+      config.args = server.server.args;
+    }
+    if (server.server.url) {
+      config.url = server.server.url;
+    }
+    mcpJsonText.value = JSON.stringify(config, null, 2);
+  } else {
+    mcpJsonText.value = '{\n  "command": "",\n  "args": []\n}';
+  }
+}
+
+// 添加 MCP 服务器
+function addMcpServer() {
+  editingMcpServer.value = null;
+  mcpForm.value = {
+    id: '',
+    name: '',
+    description: '',
+    serverType: 'stdio',
+    command: '',
+    args: '',
+    url: '',
+    env: '{}',
+    headers: '{}',
+  };
+  mcpEditMode.value = 'form';
+  mcpJsonError.value = null;
+  initMcpJsonText();
+  showMcpDialog.value = true;
+}
+
+// 编辑 MCP 服务器
+function editMcpServer(server: McpServer) {
+  editingMcpServer.value = server;
+  mcpForm.value = {
+    id: server.id,
+    name: server.name || '',
+    description: server.description || '',
+    serverType: server.server.type || 'stdio',
+    command: server.server.command || '',
+    args: server.server.args?.join('\n') || '',
+    url: server.server.url || '',
+    env: '{}',
+    headers: '{}',
+  };
+  mcpEditMode.value = 'form';
+  mcpJsonError.value = null;
+  initMcpJsonText(server);
+  showMcpDialog.value = true;
+}
+
+// 保存 MCP 服务器
+async function saveMcpServer() {
+  mcpJsonError.value = null;
+
+  // 如果是 JSON 模式
+  if (mcpEditMode.value === 'json') {
+    try {
+      const parsed = JSON.parse(mcpJsonText.value);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        mcpJsonError.value = 'JSON 必须是一个对象';
+        return;
+      }
+
+      // 验证必要字段
+      if (!mcpForm.value.id.trim()) {
+        mcpJsonError.value = '服务器名称不能为空';
+        return;
+      }
+
+      const config = parsed as Record<string, unknown>;
+      const server: McpServer = {
+        id: mcpForm.value.id,
+        name: mcpForm.value.name || mcpForm.value.id,
+        description: mcpForm.value.description,
+        server: {
+          type: (config.type as 'stdio' | 'http' | 'sse') || 'stdio',
+          command: config.command as string | undefined,
+          args: config.args as string[] | undefined,
+          url: config.url as string | undefined,
+        },
+        apps: { claude: true, codex: false, gemini: false },
+        enabled: true,
+      };
+
+      const result = await mcpStore.upsertServer(server);
+      if (result.success) {
+        showMcpDialog.value = false;
+        mcpTab.value = 'list';
+      } else {
+        alert('保存失败: ' + result.error);
+      }
+    } catch {
+      mcpJsonError.value = 'JSON 配置格式无效';
+      return;
+    }
+    return;
+  }
+
+  // Form 模式验证
+  if (!mcpForm.value.id.trim()) {
+    mcpJsonError.value = '服务器名称不能为空';
+    return;
+  }
+
+  if (mcpForm.value.serverType === 'stdio') {
+    if (!mcpForm.value.command.trim()) {
+      mcpJsonError.value = 'stdio 类型服务器需要填写命令';
+      return;
+    }
+  } else {
+    if (!mcpForm.value.url.trim()) {
+      mcpJsonError.value = 'SSE/HTTP 类型服务器需要填写 URL';
+      return;
+    }
+  }
+
+  // 解析 env
+  let env: Record<string, string> | undefined;
+  try {
+    const parsed = JSON.parse(mcpForm.value.env);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      env = Object.keys(parsed).length > 0 ? parsed : undefined;
+    } else {
+      mcpJsonError.value = '环境变量必须是 JSON 对象';
+      return;
+    }
+  } catch {
+    mcpJsonError.value = '环境变量 JSON 格式无效';
+    return;
+  }
+
+  // 解析 headers (仅 SSE/HTTP)
+  let headers: Record<string, string> | undefined;
+  if (mcpForm.value.serverType !== 'stdio') {
+    try {
+      const parsed = JSON.parse(mcpForm.value.headers);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        headers = Object.keys(parsed).length > 0 ? parsed : undefined;
+      } else {
+        mcpJsonError.value = '请求头必须是 JSON 对象';
+        return;
+      }
+    } catch {
+      mcpJsonError.value = '请求头 JSON 格式无效';
+      return;
+    }
+  }
+
+  // 解析 args
+  const serverArgs = mcpForm.value.args
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const server: McpServer = {
+    id: mcpForm.value.id,
+    name: mcpForm.value.name || mcpForm.value.id,
+    description: mcpForm.value.description,
+    server: {
+      type: mcpForm.value.serverType,
+      command: mcpForm.value.serverType === 'stdio' ? mcpForm.value.command : undefined,
+      args: serverArgs.length > 0 ? serverArgs : undefined,
+      url: mcpForm.value.serverType !== 'stdio' ? mcpForm.value.url : undefined,
+      env,
+      headers,
+    },
+    apps: { claude: true, codex: false, gemini: false },
+    enabled: true,
+  };
+
+  const result = await mcpStore.upsertServer(server);
+  if (result.success) {
+    showMcpDialog.value = false;
+    mcpTab.value = 'list';
+  } else {
+    alert('保存失败: ' + result.error);
+  }
+}
+
+// 删除 MCP 服务器
+async function deleteMcpServer(server: McpServer) {
+  if (confirm(`确定要删除 MCP 服务器 "${server.name || server.id}" 吗？`)) {
+    await mcpStore.deleteServer(server.id);
+  }
+}
+
+// 打开预设对话框
+function openPresetDialog() {
+  showPresetDialog.value = true;
+}
+
+// 添加预设服务器
+async function addPresetServer(preset: McpPreset) {
+  const server = mcpStore.createFromPreset(preset);
+  // 如果 ID 已存在，生成唯一 ID
+  if (mcpStore.isIdExists(server.id)) {
+    server.id = mcpStore.generateUniqueId(server.id);
+  }
+  await mcpStore.upsertServer(server);
+  showPresetDialog.value = false;
+}
+
+// 获取服务器类型标签
+function getServerTypeLabel(type?: string): string {
+  const labels: Record<string, string> = {
+    stdio: 'stdio',
+    http: 'HTTP',
+    sse: 'SSE',
+  };
+  return labels[type || 'stdio'] || 'stdio';
+}
+
+// 获取服务器类型图标组件
+function getServerTypeIcon(type?: string) {
+  const icons: Record<string, unknown> = {
+    stdio: ServerStack01Icon,
+    http: GlobeIcon,
+    sse: Wifi01Icon,
+  };
+  return icons[type || 'stdio'] || ServerStack01Icon;
+}
+
+// 初始化 MCP JSON 配置文本
+function initMcpJsonConfig() {
+  const servers: Record<string, Record<string, unknown>> = {};
+  for (const server of mcpServers.value) {
+    const config: Record<string, unknown> = {};
+    if (server.server.type && server.server.type !== 'stdio') {
+      config.type = server.server.type;
+    }
+    if (server.server.command) {
+      config.command = server.server.command;
+    }
+    if (server.server.args && server.server.args.length > 0) {
+      config.args = server.server.args;
+    }
+    if (server.server.url) {
+      config.url = server.server.url;
+    }
+    servers[server.id] = config;
+  }
+  mcpJsonText.value = JSON.stringify(servers, null, 2);
+}
+
+// 保存 MCP JSON 配置
+async function saveMcpJsonConfig() {
+  try {
+    const parsed = JSON.parse(mcpJsonText.value);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      mcpJsonError.value = 'JSON 必须是一个对象';
+      return;
+    }
+
+    // 逐个添加或更新服务器
+    for (const [id, spec] of Object.entries(parsed)) {
+      if (typeof spec !== 'object' || spec === null) {
+        continue;
+      }
+      const serverSpec = spec as Record<string, unknown>;
+      const server: McpServer = {
+        id,
+        name: id,
+        server: {
+          type: (serverSpec.type as 'stdio' | 'http' | 'sse') || 'stdio',
+          command: serverSpec.command as string | undefined,
+          args: serverSpec.args as string[] | undefined,
+          url: serverSpec.url as string | undefined,
+        },
+        apps: { claude: true, codex: false, gemini: false },
+        enabled: true,
+      };
+      await mcpStore.upsertServer(server);
+    }
+    mcpTab.value = 'list';
+  } catch {
+    mcpJsonError.value = 'JSON 配置格式无效';
+  }
+}
+
+// 切换到 JSON 编辑模式时更新 JSON 文本
+function switchMcpEditMode(mode: 'form' | 'json') {
+  mcpEditMode.value = mode;
+  mcpJsonError.value = null;
+  if (mode === 'json') {
+    // 构建当前表单配置为 JSON
+    const currentConfig: Record<string, unknown> = {};
+    if (mcpForm.value.serverType !== 'stdio') {
+      currentConfig.type = mcpForm.value.serverType;
+      if (mcpForm.value.url) currentConfig.url = mcpForm.value.url;
+    } else {
+      if (mcpForm.value.command) currentConfig.command = mcpForm.value.command;
+    }
+    const argsArr = mcpForm.value.args.split('\n').map(s => s.trim()).filter(Boolean);
+    if (argsArr.length > 0) currentConfig.args = argsArr;
+    try {
+      const envParsed = JSON.parse(mcpForm.value.env);
+      if (Object.keys(envParsed).length > 0) currentConfig.env = envParsed;
+    } catch { /* ignore */ }
+    try {
+      const headersParsed = JSON.parse(mcpForm.value.headers);
+      if (Object.keys(headersParsed).length > 0) currentConfig.headers = headersParsed;
+    } catch { /* ignore */ }
+    mcpJsonText.value = JSON.stringify(currentConfig, null, 2);
+  }
+}
+
+// 切换插件启用状态
+function togglePlugin(plugin: typeof plugins.value[0]) {
+  plugin.enabled = !plugin.enabled;
+}
+
+// 初始化
+slashesStore.initBuiltinCommands();
+mcpStore.loadServers();
+</script>
+
+<template>
+  <div class="extensions-view">
+    <!-- Tab 导航 -->
+    <div class="tabs-header">
+      <div class="tabs-nav">
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          :class="['tab-btn', { active: activeTab === tab.id }]"
+          @click="switchTab(tab.id)"
+        >
+          <HugeiconsIcon :icon="tab.icon" class="tab-icon" />
+          <span class="tab-label">{{ tab.label }}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Tab 内容 -->
+    <div class="tab-content">
+      <!-- 命令 Tab -->
+      <div v-if="activeTab === 'command'" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">命令列表</h2>
+          <span class="panel-count">{{ commands.length }} 个命令</span>
+        </div>
+        <div class="command-list">
+          <div v-for="cmd in commands" :key="cmd.name" class="command-card">
+            <div class="command-header">
+              <span class="command-name">/{{ cmd.name }}</span>
+              <span class="command-type-badge">命令</span>
+            </div>
+            <p class="command-description">{{ cmd.description || '无描述' }}</p>
+            <span v-if="cmd.category" class="command-category">{{ cmd.category }}</span>
+          </div>
+          <div v-if="commands.length === 0" class="empty-state">
+            <p>暂无命令</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Skill Tab -->
+      <div v-if="activeTab === 'skill'" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">技能列表</h2>
+          <span class="panel-count">{{ skills.length }} 个技能</span>
+        </div>
+        <div class="skill-list">
+          <div v-for="skill in skills" :key="skill.name" class="skill-card">
+            <div class="skill-header">
+              <span class="skill-name">/{{ skill.name }}</span>
+              <span class="skill-type-badge">技能</span>
+            </div>
+            <p class="skill-description">{{ skill.description || '无描述' }}</p>
+          </div>
+          <div v-if="skills.length === 0" class="empty-state">
+            <p>暂无技能</p>
+            <p class="hint">技能来自 Claude CLI 初始化</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- MCP 服务 Tab -->
+      <div v-if="activeTab === 'mcp'" class="tab-panel">
+        <div class="panel-header">
+          <div class="panel-header-left">
+            <h2 class="panel-title">MCP 服务</h2>
+            <span class="panel-count">{{ mcpServers.length }} 个服务器</span>
+          </div>
+          <div class="panel-actions">
+            <button class="btn-primary btn-with-icon" @click="addMcpServer">
+              <HugeiconsIcon :icon="PlusSignIcon" class="btn-icon" />
+              新建
+            </button>
+            <button class="btn-secondary" @click="openPresetDialog">
+              预设
+            </button>
+          </div>
+        </div>
+
+        <!-- MCP Tab 切换 -->
+        <div class="mcp-tabs">
+          <button
+            :class="['mcp-tab-btn', { active: mcpTab === 'list' }]"
+            @click="mcpTab = 'list'; initMcpJsonConfig()"
+          >
+            <HugeiconsIcon :icon="GridIcon" class="mcp-tab-icon" />
+            服务
+          </button>
+          <button
+            :class="['mcp-tab-btn', { active: mcpTab === 'json' }]"
+            @click="mcpTab = 'json'; initMcpJsonConfig()"
+          >
+            <HugeiconsIcon :icon="Brackets" class="mcp-tab-icon" />
+            JSON
+          </button>
+        </div>
+
+        <div v-if="mcpStore.loading" class="loading-state">
+          <span class="loading-icon">⏳</span>
+          <p>加载中...</p>
+        </div>
+
+        <!-- 服务器列表 -->
+        <div v-else-if="mcpTab === 'list'">
+          <div v-if="mcpServers.length === 0" class="empty-state">
+            <HugeiconsIcon :icon="Plug01Icon" class="empty-icon" />
+            <p>暂无 MCP 服务器</p>
+            <p class="hint">添加 MCP 服务器以扩展 Claude 的功能</p>
+          </div>
+
+          <div v-else class="mcp-list">
+            <div
+              v-for="server in mcpServers"
+              :key="server.id"
+              class="mcp-card"
+            >
+              <div class="mcp-card-header">
+                <div class="mcp-header-left">
+                  <HugeiconsIcon :icon="getServerTypeIcon(server.server.type)" class="mcp-type-icon" :class="server.server.type || 'stdio'" />
+                  <span class="mcp-name">{{ server.id }}</span>
+                  <span class="mcp-type-badge">{{ getServerTypeLabel(server.server.type) }}</span>
+                  <span class="mcp-status-badge">已配置</span>
+                </div>
+                <div class="mcp-header-right">
+                  <button class="icon-btn" @click="editMcpServer(server)" title="编辑">
+                    <HugeiconsIcon :icon="Edit01Icon" class="icon-small" />
+                  </button>
+                  <button class="icon-btn delete" @click="deleteMcpServer(server)" title="删除">
+                    <HugeiconsIcon :icon="Delete02Icon" class="icon-small" />
+                  </button>
+                </div>
+              </div>
+
+              <div class="mcp-card-content">
+                <code class="mcp-config-display">
+                  {{ server.server.url || (server.server.command + ' ' + (server.server.args || []).join(' ')) }}
+                </code>
+
+                <div v-if="server.server.args && server.server.args.length > 0" class="mcp-tags-section">
+                  <span class="mcp-tags-label">参数:</span>
+                  <div class="mcp-tags">
+                    <span v-for="(arg, i) in server.server.args" :key="i" class="mcp-tag">{{ arg }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- JSON 配置 -->
+        <div v-else-if="mcpTab === 'json'">
+          <div class="json-editor-container">
+            <div class="json-editor-header">
+              <span class="json-editor-label">MCP 服务器配置</span>
+              <button class="btn-primary btn-sm" @click="saveMcpJsonConfig">保存配置</button>
+            </div>
+            <textarea
+              v-model="mcpJsonText"
+              class="json-editor"
+              placeholder='{"server-name": {"command": "npx", "args": ["-y", "@server/name"]}}'
+            ></textarea>
+            <p v-if="mcpJsonError" class="json-error">{{ mcpJsonError }}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 插件 Tab -->
+      <div v-if="activeTab === 'plugin'" class="tab-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">插件列表</h2>
+          <button class="btn-primary">+ 安装插件</button>
+        </div>
+        <div class="plugin-list">
+          <div v-for="plugin in plugins" :key="plugin.id" class="plugin-card">
+            <HugeiconsIcon :icon="plugin.icon" class="plugin-icon" />
+            <div class="plugin-info">
+              <h3 class="plugin-name">{{ plugin.name }}</h3>
+              <p class="plugin-description">{{ plugin.description }}</p>
+              <p class="plugin-version">版本 {{ plugin.version }}</p>
+            </div>
+            <div class="plugin-actions">
+              <button
+                :class="['btn-toggle', { active: plugin.enabled }]"
+                @click="togglePlugin(plugin)"
+              >
+                {{ plugin.enabled ? '已启用' : '已禁用' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MCP 添加/编辑对话框 -->
+    <div v-if="showMcpDialog" class="dialog-overlay" @click.self="showMcpDialog = false">
+      <div class="dialog dialog-wide">
+        <div class="dialog-header">
+          <h3>{{ editingMcpServer ? `编辑 MCP 服务器: ${editingMcpServer.id}` : '添加 MCP 服务器' }}</h3>
+          <button class="close-btn" @click="showMcpDialog = false">×</button>
+        </div>
+        <div class="dialog-body">
+          <!-- 服务器名称 -->
+          <div class="form-group">
+            <label>服务器名称</label>
+            <input
+              v-model="mcpForm.id"
+              type="text"
+              placeholder="my-mcp-server"
+              :disabled="!!editingMcpServer"
+              class="form-input"
+            />
+          </div>
+
+          <!-- 编辑模式切换 -->
+          <div class="edit-mode-toggle">
+            <span class="edit-mode-label">编辑模式:</span>
+            <button
+              :class="['mode-btn', { active: mcpEditMode === 'form' }]"
+              @click="switchMcpEditMode('form')"
+            >
+              表单
+            </button>
+            <button
+              :class="['mode-btn', { active: mcpEditMode === 'json' }]"
+              @click="switchMcpEditMode('json')"
+            >
+              JSON
+            </button>
+          </div>
+
+          <!-- JSON 模式 -->
+          <div v-if="mcpEditMode === 'json'" class="form-group">
+            <label>服务器配置 (JSON)</label>
+            <textarea
+              v-model="mcpJsonText"
+              class="form-textarea form-mono"
+              placeholder='{"command": "npx", "args": ["-y", "@server/name"]}'
+            ></textarea>
+          </div>
+
+          <!-- 表单模式 -->
+          <template v-else>
+            <!-- 服务器类型 -->
+            <div class="form-group">
+              <label>服务器类型</label>
+              <div class="server-type-tabs">
+                <button
+                  :class="['type-tab', { active: mcpForm.serverType === 'stdio' }]"
+                  @click="mcpForm.serverType = 'stdio'"
+                >
+                  <HugeiconsIcon :icon="ServerStack01Icon" class="type-icon" />
+                  stdio
+                </button>
+                <button
+                  :class="['type-tab', { active: mcpForm.serverType === 'sse' }]"
+                  @click="mcpForm.serverType = 'sse'"
+                >
+                  <HugeiconsIcon :icon="Wifi01Icon" class="type-icon" />
+                  SSE
+                </button>
+                <button
+                  :class="['type-tab', { active: mcpForm.serverType === 'http' }]"
+                  @click="mcpForm.serverType = 'http'"
+                >
+                  <HugeiconsIcon :icon="GlobeIcon" class="type-icon" />
+                  HTTP
+                </button>
+              </div>
+            </div>
+
+            <!-- STDIO 类型表单 -->
+            <template v-if="mcpForm.serverType === 'stdio'">
+              <div class="form-group">
+                <label>命令</label>
+                <input
+                  v-model="mcpForm.command"
+                  type="text"
+                  placeholder="npx -y @modelcontextprotocol/server-name"
+                  class="form-input form-mono"
+                />
+              </div>
+              <div class="form-group">
+                <label>参数 (每行一个)</label>
+                <textarea
+                  v-model="mcpForm.args"
+                  class="form-textarea form-mono"
+                  placeholder="--flag&#10;value"
+                ></textarea>
+              </div>
+            </template>
+
+            <!-- SSE/HTTP 类型表单 -->
+            <template v-else>
+              <div class="form-group">
+                <label>URL</label>
+                <input
+                  v-model="mcpForm.url"
+                  type="text"
+                  :placeholder="mcpForm.serverType === 'sse' ? 'http://localhost:3001/sse' : 'http://localhost:3001'"
+                  class="form-input form-mono"
+                />
+              </div>
+              <div class="form-group">
+                <label>请求头 (JSON)</label>
+                <textarea
+                  v-model="mcpForm.headers"
+                  class="form-textarea form-mono"
+                  placeholder='{"Authorization": "Bearer ..."}'
+                ></textarea>
+              </div>
+            </template>
+
+            <!-- 环境变量 -->
+            <div class="form-group">
+              <label>环境变量 (JSON)</label>
+              <textarea
+                v-model="mcpForm.env"
+                class="form-textarea form-mono"
+                placeholder='{"API_KEY": "..."}'
+              ></textarea>
+            </div>
+          </template>
+
+          <!-- 错误信息 -->
+          <p v-if="mcpJsonError" class="form-error">{{ mcpJsonError }}</p>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn-secondary" @click="showMcpDialog = false">取消</button>
+          <button class="btn-primary" @click="saveMcpServer">
+            {{ editingMcpServer ? '保存修改' : '添加服务器' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 预设服务器对话框 -->
+    <div v-if="showPresetDialog" class="dialog-overlay" @click.self="showPresetDialog = false">
+      <div class="dialog dialog-large">
+        <div class="dialog-header">
+          <h3>选择预设服务器</h3>
+          <button class="close-btn" @click="showPresetDialog = false">×</button>
+        </div>
+        <div class="dialog-body">
+          <div class="preset-list">
+            <div
+              v-for="preset in MCP_PRESETS"
+              :key="preset.id"
+              class="preset-card"
+              @click="addPresetServer(preset)"
+            >
+              <h4 class="preset-name">{{ preset.name }}</h4>
+              <p class="preset-description">{{ preset.description }}</p>
+              <code v-if="preset.server.command" class="preset-command">
+                {{ preset.server.command }} {{ (preset.server.args || []).join(' ') }}
+              </code>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.extensions-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-primary, #ffffff);
+  overflow: hidden;
+}
+
+/* Tab 导航 */
+.tabs-header {
+  padding: 0 2rem;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  background-color: var(--bg-primary, #ffffff);
+}
+
+.tabs-nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary, #1f2937);
+}
+
+.tab-btn.active {
+  color: var(--primary-color, #3b82f6);
+  border-bottom-color: var(--primary-color, #3b82f6);
+}
+
+.tab-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* Tab 内容 */
+.tab-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+}
+
+.tab-panel {
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.panel-header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+}
+
+.panel-count {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.panel-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* 按钮样式 */
+.btn-primary {
+  padding: 0.5rem 1rem;
+  background-color: var(--primary-color, #3b82f6);
+  color: #ffffff;
+  border: none;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-hover, #2563eb);
+}
+
+.btn-secondary {
+  padding: 0.5rem 1rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  color: var(--text-primary, #1f2937);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+  background-color: var(--bg-secondary, #f9fafb);
+}
+
+.btn-toggle {
+  padding: 0.375rem 0.75rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  color: var(--text-secondary, #6b7280);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-toggle.active {
+  background-color: rgba(16, 185, 129, 0.1);
+  color: var(--success-color, #10b981);
+  border-color: var(--success-color, #10b981);
+}
+
+/* 命令/Skill 列表 */
+.command-list,
+.skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.command-card,
+.skill-card {
+  padding: 1rem;
+  background-color: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.5rem;
+}
+
+.command-header,
+.skill-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.command-name,
+.skill-name {
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+}
+
+.command-type-badge,
+.skill-type-badge {
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  background-color: var(--primary-color, #3b82f6);
+  color: #ffffff;
+  border-radius: 0.25rem;
+}
+
+.skill-type-badge {
+  background-color: #f59e0b;
+}
+
+.command-description,
+.skill-description {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.command-category {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.625rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  color: var(--text-secondary, #6b7280);
+  border-radius: 0.25rem;
+}
+
+/* MCP 服务列表 */
+.mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mcp-card {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.5rem;
+  background-color: var(--bg-secondary, #f9fafb);
+  overflow: hidden;
+}
+
+.mcp-card.disabled {
+  opacity: 0.6;
+}
+
+.mcp-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+}
+
+.mcp-card-header:hover {
+  background-color: var(--bg-tertiary, #f3f4f6);
+}
+
+.mcp-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.expand-icon {
+  font-size: 0.625rem;
+  color: var(--text-secondary, #6b7280);
+  transition: transform 0.2s;
+}
+
+.expand-icon.expanded {
+  transform: rotate(90deg);
+}
+
+.mcp-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background-color: var(--primary-color, #3b82f6);
+  color: #ffffff;
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.mcp-name {
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+}
+
+.mcp-type-badge {
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  color: var(--text-secondary, #6b7280);
+  border-radius: 0.25rem;
+}
+
+/* Toggle 开关 */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--bg-tertiary, #e5e7eb);
+  border-radius: 10px;
+  transition: 0.2s;
+}
+
+.toggle-slider::before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  border-radius: 50%;
+  transition: 0.2s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: var(--success-color, #10b981);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(16px);
+}
+
+/* MCP 卡片内容 */
+.mcp-card-content {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+  background-color: var(--bg-primary, #ffffff);
+}
+
+.mcp-description {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.mcp-command,
+.mcp-url {
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.mcp-command .label,
+.mcp-url .label {
+  color: var(--text-secondary, #6b7280);
+  margin-right: 0.5rem;
+}
+
+.mcp-command code,
+.mcp-url code {
+  padding: 0.25rem 0.5rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  border-radius: 0.25rem;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.mcp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+}
+
+.tag {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.625rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  color: var(--text-secondary, #6b7280);
+  border-radius: 0.25rem;
+}
+
+.mcp-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+}
+
+.action-btn {
+  padding: 0.375rem 0.75rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  color: var(--text-primary, #1f2937);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.375rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.action-btn:hover {
+  background-color: var(--bg-secondary, #f9fafb);
+}
+
+.action-btn.delete {
+  color: var(--error-color, #ef4444);
+}
+
+.action-btn.delete:hover {
+  background-color: var(--error-bg, #fef2f2);
+}
+
+/* 插件列表 */
+.plugin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.plugin-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: 1.25rem;
+  background-color: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.75rem;
+}
+
+.plugin-icon {
+  width: 2rem;
+  height: 2rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.plugin-info {
+  flex: 1;
+}
+
+.plugin-name {
+  margin: 0 0 0.25rem 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+}
+
+.plugin-description {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.plugin-version {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--text-muted, #9ca3af);
+}
+
+.plugin-actions {
+  display: flex;
+  align-items: center;
+}
+
+/* 空状态 */
+.empty-state,
+.loading-state {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.empty-icon,
+.loading-icon {
+  width: 3rem;
+  height: 3rem;
+  display: block;
+  margin-bottom: 1rem;
+  opacity: 0.5;
+  color: var(--text-muted, #9ca3af);
+}
+
+.hint {
+  font-size: 0.875rem;
+  color: var(--text-muted, #9ca3af);
+}
+
+/* 对话框 */
+.dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dialog {
+  width: 480px;
+  max-height: 80vh;
+  background-color: var(--bg-primary, #ffffff);
+  border-radius: 0.75rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.dialog-large {
+  width: 640px;
+}
+
+.dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.dialog-header h3 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+}
+
+.dialog-body {
+  padding: 1.5rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+}
+
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary, #1f2937);
+}
+
+.form-group input,
+.form-group select {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  background-color: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #1f2937);
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: var(--primary-color, #3b82f6);
+}
+
+.form-group input:disabled {
+  background-color: var(--bg-tertiary, #f3f4f6);
+  cursor: not-allowed;
+}
+
+/* 预设列表 */
+.preset-list {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+}
+
+.preset-card {
+  padding: 1rem;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.preset-card:hover {
+  border-color: var(--primary-color, #3b82f6);
+  background-color: var(--bg-secondary, #f9fafb);
+}
+
+.preset-name {
+  margin: 0 0 0.375rem 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+}
+
+.preset-description {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #6b7280);
+}
+
+.preset-command {
+  display: block;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.625rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  border-radius: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* MCP Tabs */
+.mcp-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  padding: 0.25rem;
+  border-radius: 0.5rem;
+}
+
+.mcp-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mcp-tab-btn:hover {
+  color: var(--text-primary, #1f2937);
+}
+
+.mcp-tab-btn.active {
+  background-color: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #1f2937);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.mcp-tab-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+/* MCP 卡片样式 */
+.mcp-card {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.5rem;
+  background-color: var(--bg-secondary, #ffffff);
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+
+.mcp-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+}
+
+.mcp-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-header-right {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.mcp-type-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.mcp-type-icon.stdio {
+  color: var(--text-muted, #6b7280);
+}
+
+.mcp-type-icon.sse {
+  color: #3b82f6;
+}
+
+.mcp-type-icon.http {
+  color: #10b981;
+}
+
+.mcp-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text-primary, #1f2937);
+}
+
+.mcp-type-badge {
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  color: var(--text-secondary, #6b7280);
+  border-radius: 0.25rem;
+}
+
+.mcp-status-badge {
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  background-color: rgba(16, 185, 129, 0.1);
+  color: var(--success-color, #10b981);
+  border-radius: 0.25rem;
+}
+
+.mcp-card-content {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+  background-color: var(--bg-primary, #f9fafb);
+}
+
+.mcp-config-display {
+  display: block;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #6b7280);
+  background-color: var(--bg-tertiary, #f3f4f6);
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-tags-section {
+  margin-top: 0.5rem;
+}
+
+.mcp-tags-label {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted, #9ca3af);
+  margin-bottom: 0.375rem;
+}
+
+.mcp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.mcp-tag {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.625rem;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  color: var(--text-secondary, #6b7280);
+  border-radius: 0.25rem;
+}
+
+/* 图标按钮 */
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background-color 0.2s;
+}
+
+.icon-btn:hover {
+  background-color: var(--bg-tertiary, #f3f4f6);
+}
+
+.icon-btn.delete:hover {
+  background-color: var(--error-bg, #fef2f2);
+}
+
+.icon-small {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.btn-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.btn-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* JSON 编辑器 */
+.json-editor-container {
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.json-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background-color: var(--bg-secondary, #f9fafb);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.json-editor-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary, #1f2937);
+}
+
+.json-editor {
+  width: 100%;
+  min-height: 300px;
+  padding: 1rem;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  border: none;
+  background-color: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #1f2937);
+  resize: vertical;
+}
+
+.json-editor:focus {
+  outline: none;
+}
+
+.json-error {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  color: var(--error-color, #ef4444);
+  background-color: var(--error-bg, #fef2f2);
+}
+
+/* 对话框样式 */
+.dialog-wide {
+  width: 550px;
+  max-height: 85vh;
+}
+
+.edit-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.edit-mode-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary, #1f2937);
+}
+
+.mode-btn {
+  padding: 0.375rem 0.75rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-btn.active {
+  background-color: var(--primary-color, #3b82f6);
+  color: #ffffff;
+  border-color: var(--primary-color, #3b82f6);
+}
+
+.server-type-tabs {
+  display: flex;
+  gap: 0.25rem;
+  background-color: var(--bg-tertiary, #f3f4f6);
+  padding: 0.25rem;
+  border-radius: 0.5rem;
+}
+
+.type-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.type-tab:hover {
+  color: var(--text-primary, #1f2937);
+}
+
+.type-tab.active {
+  background-color: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #1f2937);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.type-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.form-input,
+.form-textarea {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 0.375rem;
+  font-size: 0.875rem;
+  background-color: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #1f2937);
+}
+
+.form-input:focus,
+.form-textarea:focus {
+  outline: none;
+  border-color: var(--primary-color, #3b82f6);
+}
+
+.form-textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.form-mono {
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.form-error {
+  margin: 0;
+  padding: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--error-color, #ef4444);
+  background-color: var(--error-bg, #fef2f2);
+  border-radius: 0.375rem;
+}
+
+.btn-sm {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+/* 深色模式 */
+@media (prefers-color-scheme: dark) {
+  .extensions-view {
+    background-color: var(--bg-primary, #111827);
+  }
+
+  .tabs-header {
+    background-color: var(--bg-primary, #111827);
+    border-bottom-color: var(--border-color, #374151);
+  }
+
+  .tab-btn {
+    color: var(--text-secondary, #9ca3af);
+  }
+
+  .tab-btn:hover {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .panel-title {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .command-card,
+  .skill-card,
+  .mcp-card,
+  .plugin-card {
+    background-color: var(--bg-secondary, #1f2937);
+    border-color: var(--border-color, #374151);
+  }
+
+  .command-name,
+  .skill-name,
+  .mcp-name,
+  .plugin-name {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .command-description,
+  .skill-description,
+  .mcp-description,
+  .plugin-description {
+    color: var(--text-secondary, #d1d5db);
+  }
+
+  .mcp-card-header:hover {
+    background-color: var(--bg-tertiary, #374151);
+  }
+
+  .mcp-card-content {
+    background-color: var(--bg-secondary, #1f2937);
+  }
+
+  .dialog {
+    background-color: var(--bg-primary, #1f2937);
+  }
+
+  .dialog-header,
+  .dialog-footer {
+    border-color: var(--border-color, #374151);
+  }
+
+  .dialog-header h3 {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .form-group label {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .form-group input,
+  .form-group select {
+    background-color: var(--bg-secondary, #1f2937);
+    border-color: var(--border-color, #374151);
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .preset-card {
+    border-color: var(--border-color, #374151);
+  }
+
+  .preset-card:hover {
+    background-color: var(--bg-tertiary, #374151);
+  }
+
+  /* MCP Tabs */
+  .mcp-tabs {
+    background-color: var(--bg-tertiary, #374151);
+  }
+
+  .mcp-tab-btn {
+    color: var(--text-secondary, #9ca3af);
+  }
+
+  .mcp-tab-btn:hover {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .mcp-tab-btn.active {
+    background-color: var(--bg-secondary, #1f2937);
+    color: var(--text-primary, #f9fafb);
+  }
+
+  /* MCP Card */
+  .mcp-card {
+    background-color: var(--bg-secondary, #1f2937);
+    border-color: var(--border-color, #374151);
+  }
+
+  .mcp-card-content {
+    background-color: var(--bg-primary, #111827);
+    border-color: var(--border-color, #374151);
+  }
+
+  .mcp-name {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .mcp-type-badge {
+    background-color: var(--bg-tertiary, #374151);
+    color: var(--text-secondary, #9ca3af);
+  }
+
+  .mcp-config-display {
+    background-color: var(--bg-tertiary, #374151);
+    color: var(--text-secondary, #d1d5db);
+  }
+
+  .mcp-tag {
+    background-color: var(--bg-tertiary, #374151);
+    color: var(--text-secondary, #9ca3af);
+  }
+
+  /* JSON Editor */
+  .json-editor-container {
+    border-color: var(--border-color, #374151);
+  }
+
+  .json-editor-header {
+    background-color: var(--bg-secondary, #1f2937);
+    border-color: var(--border-color, #374151);
+  }
+
+  .json-editor-label {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .json-editor {
+    background-color: var(--bg-primary, #111827);
+    color: var(--text-primary, #f9fafb);
+  }
+
+  /* Edit Mode */
+  .edit-mode-label {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .mode-btn {
+    background-color: var(--bg-tertiary, #374151);
+    border-color: var(--border-color, #374151);
+    color: var(--text-secondary, #9ca3af);
+  }
+
+  .mode-btn.active {
+    background-color: var(--primary-color, #3b82f6);
+    color: #ffffff;
+  }
+
+  .server-type-tabs {
+    background-color: var(--bg-tertiary, #374151);
+  }
+
+  .type-tab {
+    color: var(--text-secondary, #9ca3af);
+  }
+
+  .type-tab:hover {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .type-tab.active {
+    background-color: var(--bg-secondary, #1f2937);
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .form-input,
+  .form-textarea {
+    background-color: var(--bg-secondary, #1f2937);
+    border-color: var(--border-color, #374151);
+    color: var(--text-primary, #f9fafb);
+  }
+}
+</style>

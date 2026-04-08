@@ -1,0 +1,86 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="panelBase" x1="138" y1="890" x2="886" y2="144" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0C5DBA"/>
+      <stop offset="0.28" stop-color="#1D82EA"/>
+      <stop offset="0.64" stop-color="#48ABFF"/>
+      <stop offset="1" stop-color="#2D86E5"/>
+    </linearGradient>
+    <radialGradient id="topGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(626 326) rotate(90) scale(396 408)">
+      <stop stop-color="#B3E1FF" stop-opacity="0.72"/>
+      <stop offset="0.5" stop-color="#B3E1FF" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#B3E1FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="bottomDepth" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(406 810) rotate(90) scale(348 462)">
+      <stop stop-color="#08498E" stop-opacity="0.58"/>
+      <stop offset="1" stop-color="#08498E" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="centerLift" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 526) rotate(90) scale(310 360)">
+      <stop stop-color="#8ECDFF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#8ECDFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="windowFill" x1="188" y1="184" x2="836" y2="836" gradientUnits="userSpaceOnUse">
+      <stop stop-color="white" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#EAF4FF" stop-opacity="0.94"/>
+    </linearGradient>
+    <linearGradient id="windowHeader" x1="208" y1="212" x2="816" y2="344" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E8F5FF"/>
+      <stop offset="1" stop-color="#D4EBFF"/>
+    </linearGradient>
+    <linearGradient id="cursorFill" x1="360" y1="380" x2="672" y2="650" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2188EF"/>
+      <stop offset="1" stop-color="#0B67C8"/>
+    </linearGradient>
+    <filter id="panelShadow" x="26" y="30" width="972" height="972" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="18"/>
+      <feGaussianBlur stdDeviation="18"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0275 0 0 0 0 0.2235 0 0 0 0 0.4667 0 0 0 0.18 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+    <filter id="windowShadow" x="128" y="138" width="768" height="760" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="18"/>
+      <feGaussianBlur stdDeviation="20"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.053 0 0 0 0 0.247 0 0 0 0 0.478 0 0 0 0.22 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+    <filter id="cursorShadow" x="300" y="340" width="470" height="360" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="10"/>
+      <feGaussianBlur stdDeviation="12"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.051 0 0 0 0 0.251 0 0 0 0 0.49 0 0 0 0.24 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#panelShadow)">
+    <rect x="58" y="58" width="908" height="908" rx="228" fill="url(#panelBase)"/>
+    <rect x="58" y="58" width="908" height="908" rx="228" fill="url(#topGlow)"/>
+    <rect x="58" y="58" width="908" height="908" rx="228" fill="url(#centerLift)"/>
+    <rect x="58" y="58" width="908" height="908" rx="228" fill="url(#bottomDepth)"/>
+  </g>
+
+  <g filter="url(#windowShadow)">
+    <rect x="180" y="194" width="664" height="648" rx="92" fill="url(#windowFill)"/>
+    <rect x="180" y="194" width="664" height="120" rx="92" fill="url(#windowHeader)"/>
+    <path d="M180 270C180 228.026 214.026 194 256 194H768C809.974 194 844 228.026 844 270V298H180V270Z" fill="url(#windowHeader)"/>
+    <circle cx="272" cy="254" r="17" fill="#7DC1FF"/>
+    <circle cx="326" cy="254" r="17" fill="#9FD5FF"/>
+    <circle cx="380" cy="254" r="17" fill="#BDE3FF"/>
+  </g>
+
+  <g filter="url(#cursorShadow)">
+    <path d="M392 388L464 496L392 604" stroke="url(#cursorFill)" stroke-width="66" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="518" y="580" width="186" height="62" rx="31" fill="url(#cursorFill)"/>
+  </g>
+</svg>

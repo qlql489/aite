@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git show 1c6e534a31c14cfd2568f4a2548c1cc3ea849ce0 --no-stat)",
+      "Bash(cargo check 2>&1 | grep -E \"^error\" -A 8)",
+      "Bash(cargo check 2>&1 | tail -10)",
+      "Bash(cargo check 2>&1 | tail -30)",
+      "Bash(cargo build 2>&1 | head -50)",
+      "Bash(cargo build 2>&1 | tail -20)",
+      "Bash(cd /Users/zengjinlong/Documents/work/jacob/claude-desk && git add -A && git status)",
+      "Bash(find /Users/zengjinlong/Documents/work/jacob/claude-desk/src -name \"*.vue\" -exec basename {} \\\\; | sort)",
+      "Bash(cat /Users/zengjinlong/.claude/projects/-Users-zengjinlong-Documents-work-ai-space-user-rewite/d9733847-294d-41f4-bcb7-2a082b0a78f1.jsonl | python3 -c \"\nimport sys\nimport json\n\nfor i, line in enumerate\\(sys.stdin\\):\n    line = line.strip\\(\\)\n    if not line:\n        continue\n    try:\n        data = json.loads\\(line\\)\n        entry_type = data.get\\('type', 'unknown'\\)\n        if entry_type == 'user':\n            content = data.get\\('message', {}\\).get\\('content', ''\\)\n            print\\(f'{i}: {content[:200]}'\\)\n    except Exception as e:\n        print\\(f'{i}: error - {e}'\\)\n\" | head -10)",
+      "Bash(cat /Users/zengjinlong/.claude/projects/-Users-zengjinlong-Documents-work-ai-space-user-rewite/d9733847-294d-41f4-bcb7-2a082b0a78f1.jsonl | python3 -c \"\nimport sys\nimport json\n\nuser_count = 0\nfor i, line in enumerate\\(sys.stdin\\):\n    line = line.strip\\(\\)\n    if not line:\n        continue\n    try:\n        data = json.loads\\(line\\)\n        entry_type = data.get\\('type', 'unknown'\\)\n        if entry_type == 'user':\n            user_count += 1\n            content = data.get\\('message', {}\\).get\\('content', ''\\)\n            is_meta = data.get\\('isMeta', False\\)\n            \n            # 检查内容类型\n            if isinstance\\(content, str\\):\n                preview = content[:100].replace\\('\\\\n', '\\\\\\\\n'\\)\n            else:\n                preview = str\\(type\\(content\\)\\)\n            \n            print\\(f'{i}: user #{user_count}, isMeta={is_meta}, preview={preview}'\\)\n            \n            if user_count >= 10:  # 只看前10条用户消息\n                break\n    except Exception as e:\n        print\\(f'{i}: error - {e}'\\)\n\")"
+    ]
+  }
+}

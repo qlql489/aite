@@ -1,0 +1,46 @@
+{
+  "name": "aite",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:tauri\"",
+    "dev:node": "tsx watch node-backend/src/index.ts",
+    "dev:frontend": "vite",
+    "dev:tauri": "tauri dev",
+    "build:node": "cd node-backend && tsc",
+    "build:frontend": "vue-tsc --noEmit && vite build",
+    "build": "npm run build:node && npm run build:frontend && tauri build",
+    "preview": "vite preview",
+    "clean": "shx rm -rf src-tauri/target node_modules/.vite dist",
+    "clean:all": "shx rm -rf src-tauri/target node_modules/.vite dist node_modules node-backend/dist",
+    "build:macos": "bash ./scripts/build-macos-local.sh",
+    "build:bundle": "bash ./scripts/build-local-package.sh"
+  },
+  "dependencies": {
+    "@hugeicons/core-free-icons": "^3.1.1",
+    "@hugeicons/react": "^1.1.5",
+    "@hugeicons/vue": "^1.0.4",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-store": "^2.4.2",
+    "dompurify": "^3.3.1",
+    "highlight.js": "^11.11.1",
+    "marked": "^15.0.12",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^25.3.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "concurrently": "^9.0.0",
+    "shx": "^0.4.0",
+    "tsx": "4.15.2",
+    "typescript": "~5.6.2",
+    "vite": "5.4.19",
+    "vue-tsc": "^2.1.10"
+  }
+}
