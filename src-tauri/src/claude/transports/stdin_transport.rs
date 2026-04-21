@@ -3,7 +3,7 @@
 // This module implements communication with Claude Code CLI via stdin/stdout
 // using the NDJSON (newline-delimited JSON) protocol.
 
-use crate::claude::protocol::{deserialize_message, serialize_message, SdkMessage};
+use crate::claude::protocol::{deserialize_message, serialize_message, SdkMessage, SystemMessage};
 use crate::claude::transport::{ClaudeTransport, TransportError};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -27,6 +27,59 @@ pub struct StdinTransport {
 }
 
 impl StdinTransport {
+    fn build_transport_error_system_message(
+        session_id: Option<String>,
+        parse_error: &str,
+        raw_line: &str,
+    ) -> SdkMessage {
+        SdkMessage::System(SystemMessage {
+            subtype: Some("transport_error".to_string()),
+            cwd: None,
+            session_id,
+            tools: None,
+            mcp_servers: None,
+            model: None,
+            permission_mode: None,
+            api_key_source: None,
+            claude_code_version: None,
+            slash_commands: None,
+            agents: None,
+            skills: None,
+            plugins: None,
+            output_style: None,
+            uuid: None,
+            status: None,
+            task_id: None,
+            task_status: None,
+            output_file: None,
+            summary: None,
+            hook_id: None,
+            hook_name: None,
+            hook_event: None,
+            output: Some(raw_line.to_string()),
+            stdout: None,
+            stderr: None,
+            exit_code: None,
+            outcome: None,
+            attempt: None,
+            max_retries: None,
+            retry_delay_ms: None,
+            error_status: None,
+            error: Some(parse_error.to_string()),
+        })
+    }
+
+    fn extract_session_id_from_raw_line(raw_line: &str) -> Option<String> {
+        serde_json::from_str::<serde_json::Value>(raw_line)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("session_id")
+                    .and_then(|session_id| session_id.as_str())
+                    .map(ToOwned::to_owned)
+            })
+    }
+
     fn should_skip_stdout_log(msg: &SdkMessage) -> bool {
         matches!(
             msg,
@@ -150,6 +203,25 @@ impl StdinTransport {
                                     "⚠️ Failed to deserialize message: {} | line: {}",
                                     e, trimmed
                                 );
+
+                                let extracted_session_id =
+                                    Self::extract_session_id_from_raw_line(trimmed);
+                                let fallback_session_id = match extracted_session_id {
+                                    Some(session_id) => Some(session_id),
+                                    None => session_id.lock().await.clone(),
+                                };
+                                let fallback_message = Self::build_transport_error_system_message(
+                                    fallback_session_id,
+                                    &e.to_string(),
+                                    trimmed,
+                                );
+
+                                if let Err(send_error) = message_tx.send(fallback_message) {
+                                    error!(
+                                        "❌ Failed to queue fallback transport error message: {}",
+                                        send_error
+                                    );
+                                }
                             }
                         }
                     }

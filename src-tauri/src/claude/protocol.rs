@@ -299,7 +299,11 @@ pub struct SystemMessage {
     pub max_retries: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_delay_ms: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_optional_stringified_value"
+    )]
     pub error_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -307,6 +311,12 @@ pub struct SystemMessage {
 
 impl SystemMessage {
     pub fn display_text(&self) -> Option<String> {
+        if self.subtype.as_deref() == Some("transport_error") {
+            let error = clean_system_detail(self.error.as_deref())
+                .unwrap_or_else(|| "未知解析错误".to_string());
+            return Some(format!("协议消息解析失败：{}", error));
+        }
+
         if self.subtype.as_deref() != Some("api_retry") {
             return None;
         }
@@ -359,6 +369,28 @@ fn clean_system_detail(value: Option<&str>) -> Option<String> {
     }
 
     Some(trimmed.to_string())
+}
+
+fn deserialize_optional_stringified_value<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+
+    let stringified = match value {
+        Value::Null => return Ok(None),
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        other => serde_json::to_string(&other).map_err(serde::de::Error::custom)?,
+    };
+
+    Ok(Some(stringified))
 }
 
 fn format_retry_delay_ms(retry_delay_ms: f64) -> String {
@@ -730,5 +762,66 @@ mod tests {
             }
             _ => panic!("Expected system message"),
         }
+    }
+
+    #[test]
+    fn test_system_api_retry_accepts_numeric_error_status() {
+        let json = r#"{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":502.1013160393518,"error_status":429,"error":"rate_limit","session_id":"abc123","uuid":"xyz"}"#;
+        let msg = deserialize_message(json).unwrap();
+
+        match msg {
+            SdkMessage::System(sys) => {
+                assert_eq!(sys.error_status.as_deref(), Some("429"));
+                assert_eq!(
+                    sys.display_text().as_deref(),
+                    Some("接口请求失败，正在准备重试（已重试 1/10 次，502 毫秒后再次尝试，状态：429，错误：rate_limit）")
+                );
+            }
+            _ => panic!("Expected system message"),
+        }
+    }
+
+    #[test]
+    fn test_transport_error_display_text() {
+        let msg = SystemMessage {
+            subtype: Some("transport_error".to_string()),
+            cwd: None,
+            session_id: Some("abc123".to_string()),
+            tools: None,
+            mcp_servers: None,
+            model: None,
+            permission_mode: None,
+            api_key_source: None,
+            claude_code_version: None,
+            slash_commands: None,
+            agents: None,
+            skills: None,
+            plugins: None,
+            output_style: None,
+            uuid: None,
+            status: None,
+            task_id: None,
+            task_status: None,
+            output_file: None,
+            summary: None,
+            hook_id: None,
+            hook_name: None,
+            hook_event: None,
+            output: None,
+            stdout: None,
+            stderr: None,
+            exit_code: None,
+            outcome: None,
+            attempt: None,
+            max_retries: None,
+            retry_delay_ms: None,
+            error_status: None,
+            error: Some("invalid type".to_string()),
+        };
+
+        assert_eq!(
+            msg.display_text().as_deref(),
+            Some("协议消息解析失败：invalid type")
+        );
     }
 }

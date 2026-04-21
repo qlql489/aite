@@ -16,10 +16,22 @@ interface ProjectTreeResponse {
   truncated: boolean;
 }
 
+interface ProjectTreeChildrenResponse {
+  path: string;
+  children: ProjectTreeNode[];
+  truncated: boolean;
+}
+
 interface ProjectFileResponse {
   path: string;
   content: string;
   size: number;
+}
+
+interface ProjectFileSearchItem {
+  name: string;
+  path: string;
+  is_dir: boolean;
 }
 
 const props = defineProps<{
@@ -33,6 +45,11 @@ const error = ref('');
 const query = ref('');
 const treeData = ref<ProjectTreeResponse | null>(null);
 const expandedPaths = ref<Set<string>>(new Set());
+const loadedDirectoryPaths = ref<Set<string>>(new Set());
+const loadingDirectoryPaths = ref<Set<string>>(new Set());
+const searchResults = ref<ProjectFileSearchItem[]>([]);
+const searchLoading = ref(false);
+const searchError = ref('');
 const selectedFile = ref('');
 const selectedFileSize = ref(0);
 const fileContent = ref('');
@@ -46,6 +63,8 @@ const isResizing = ref(false);
 const showWorkspaceSettings = ref(false);
 
 let saveTimer: number | null = null;
+let searchTimer: number | null = null;
+let searchRequestId = 0;
 let resizeStartX = 0;
 let resizeStartWidth = 336;
 
@@ -56,29 +75,103 @@ const clearSaveTimer = () => {
   }
 };
 
-const matchesNode = (node: ProjectTreeNode): boolean => {
-  const normalized = query.value.trim().toLowerCase();
-  if (!normalized) return true;
-  if (node.name.toLowerCase().includes(normalized)) return true;
-  return node.children.some(matchesNode);
+const clearSearchTimer = () => {
+  if (searchTimer !== null) {
+    window.clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+};
+
+const countNodes = (nodes: ProjectTreeNode[]): number =>
+  nodes.reduce((total, node) => total + 1 + countNodes(node.children), 0);
+
+const findNodeByPath = (nodes: ProjectTreeNode[], targetPath: string): ProjectTreeNode | null => {
+  for (const node of nodes) {
+    if (node.path === targetPath) return node;
+    const nested = findNodeByPath(node.children, targetPath);
+    if (nested) return nested;
+  }
+  return null;
+};
+
+const replaceNodeChildren = (
+  nodes: ProjectTreeNode[],
+  targetPath: string,
+  children: ProjectTreeNode[],
+): ProjectTreeNode[] => nodes.map((node) => {
+  if (node.path === targetPath) {
+    return {
+      ...node,
+      children,
+      has_unloaded_children: false,
+    };
+  }
+  if (!node.children.length) return node;
+  return {
+    ...node,
+    children: replaceNodeChildren(node.children, targetPath, children),
+  };
+});
+
+const loadDirectoryChildren = async (path: string): Promise<boolean> => {
+  if (!props.projectPath || !treeData.value) return false;
+  if (loadedDirectoryPaths.value.has(path)) return true;
+  if (loadingDirectoryPaths.value.has(path)) return false;
+
+  const nextLoading = new Set(loadingDirectoryPaths.value);
+  nextLoading.add(path);
+  loadingDirectoryPaths.value = nextLoading;
+  error.value = '';
+
+  try {
+    const response = await invoke<ProjectTreeChildrenResponse>('read_project_tree_children', {
+      rootPath: props.projectPath,
+      dirPath: path,
+      maxEntries: 5000,
+    });
+
+    if (!treeData.value) return false;
+    treeData.value = {
+      ...treeData.value,
+      tree: replaceNodeChildren(treeData.value.tree, path, response.children),
+      truncated: treeData.value.truncated,
+    };
+
+    const nextLoaded = new Set(loadedDirectoryPaths.value);
+    nextLoaded.add(path);
+    loadedDirectoryPaths.value = nextLoaded;
+    return true;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : `读取目录 ${path} 失败`;
+    return false;
+  } finally {
+    const next = new Set(loadingDirectoryPaths.value);
+    next.delete(path);
+    loadingDirectoryPaths.value = next;
+  }
 };
 
 const loadTree = async () => {
   if (!props.projectPath) return;
   loading.value = true;
   error.value = '';
+  searchError.value = '';
+  searchResults.value = [];
+  clearSearchTimer();
+  searchLoading.value = false;
+  searchRequestId += 1;
 
   try {
     const response = await invoke<ProjectTreeResponse>('read_project_tree', {
       path: props.projectPath,
-      depth: 5,
-      max_entries: 4000,
+      depth: 0,
+      maxEntries: 5000,
     });
 
     treeData.value = response;
-    expandedPaths.value = new Set(
-      response.tree.filter((node) => node.is_dir).slice(0, 6).map((node) => node.path)
-    );
+    expandedPaths.value = new Set();
+    loadedDirectoryPaths.value = new Set();
+    loadingDirectoryPaths.value = new Set();
   } catch (err) {
     treeData.value = null;
     error.value = err instanceof Error ? err.message : '读取项目目录失败';
@@ -156,6 +249,7 @@ watch(
     editedContent.value = '';
     editorError.value = '';
     clearSaveTimer();
+    clearSearchTimer();
     void loadTree();
   },
   { immediate: true }
@@ -176,6 +270,42 @@ watch(editedContent, (value) => {
   saveTimer = window.setTimeout(() => {
     void saveFile();
   }, 650);
+});
+
+watch(() => query.value.trim(), (value) => {
+  searchRequestId += 1;
+  const currentRequestId = searchRequestId;
+  clearSearchTimer();
+  searchError.value = '';
+
+  if (!value) {
+    searchLoading.value = false;
+    searchResults.value = [];
+    return;
+  }
+
+  searchLoading.value = true;
+
+  searchTimer = window.setTimeout(async () => {
+    try {
+      const response = await invoke<ProjectFileSearchItem[]>('search_project_files', {
+        path: props.projectPath,
+        query: value,
+        maxResults: 200,
+      });
+
+      if (currentRequestId !== searchRequestId) return;
+      searchResults.value = response.filter((item) => !item.is_dir);
+    } catch (err) {
+      if (currentRequestId !== searchRequestId) return;
+      searchResults.value = [];
+      searchError.value = err instanceof Error ? err.message : '搜索文件失败';
+    } finally {
+      if (currentRequestId === searchRequestId) {
+        searchLoading.value = false;
+      }
+    }
+  }, 180);
 });
 
 onMounted(() => {
@@ -210,20 +340,17 @@ const startResize = (event: MouseEvent) => {
 
 onBeforeUnmount(() => {
   clearSaveTimer();
+  clearSearchTimer();
   stopResize();
 });
 
-const visibleNodes = computed(() => {
-  if (!treeData.value) return [] as ProjectTreeNode[];
-  return treeData.value.tree.filter(matchesNode);
-});
-
-const normalizedQuery = computed(() => query.value.trim().toLowerCase());
+const visibleNodes = computed<ProjectTreeNode[]>(() => treeData.value?.tree ?? []);
+const isSearching = computed(() => query.value.trim().length > 0);
 const rootLabel = computed(() => props.projectName || treeData.value?.root_name || '当前项目');
 const subtitle = computed(() => treeData.value?.root_path || props.projectPath);
 const fileSummary = computed(() => {
   if (!treeData.value) return '';
-  return `${treeData.value.summary.total_files} 文件`;
+  return `已加载 ${countNodes(treeData.value.tree)} 项`;
 });
 const selectedFileName = computed(() => selectedFile.value.split('/').pop() || selectedFile.value);
 const hasEditor = computed(() => Boolean(selectedFile.value));
@@ -236,11 +363,18 @@ const sizeLabel = computed(() => {
   return `${(selectedFileSize.value / (1024 * 1024)).toFixed(1)} MB`;
 });
 
-const togglePath = (path: string) => {
+const togglePath = async (path: string) => {
+  const targetNode = treeData.value ? findNodeByPath(treeData.value.tree, path) : null;
+  if (!targetNode?.is_dir) return;
+
   const next = new Set(expandedPaths.value);
   if (next.has(path)) {
     next.delete(path);
   } else {
+    if (!loadedDirectoryPaths.value.has(path) && targetNode.has_unloaded_children) {
+      const loaded = await loadDirectoryChildren(path);
+      if (!loaded) return;
+    }
     next.add(path);
   }
   expandedPaths.value = next;
@@ -360,8 +494,34 @@ const closeEditor = async () => {
 
           <div v-if="error" class="feedback-card error">{{ error }}</div>
           <div v-else-if="loading && !treeData" class="feedback-card">正在加载项目目录…</div>
+          <div v-else-if="isSearching" class="tree-scroll">
+            <div v-if="searchError" class="feedback-card error">{{ searchError }}</div>
+            <div v-else-if="searchLoading" class="feedback-card">正在搜索文件…</div>
+            <div v-else-if="!searchResults.length" class="feedback-card empty">没有匹配的文件</div>
+            <div v-else class="search-result-list">
+              <button
+                v-for="item in searchResults"
+                :key="item.path"
+                type="button"
+                class="search-result-row"
+                :class="{ 'is-selected': selectedFile === item.path }"
+                @click="loadFile(item.path)"
+              >
+                <span class="tree-icon file">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M4 2.5H9.5L12 5V13.5H4V2.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                    <path d="M9.5 2.5V5H12" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                  </svg>
+                </span>
+                <span class="search-result-copy">
+                  <span class="search-result-name">{{ item.name }}</span>
+                  <span class="search-result-path">{{ item.path }}</span>
+                </span>
+              </button>
+            </div>
+          </div>
           <div v-else-if="treeData" class="tree-scroll">
-            <div v-if="!visibleNodes.length" class="feedback-card empty">没有匹配的目录项</div>
+            <div v-if="!visibleNodes.length" class="feedback-card empty">当前目录没有可显示的文件</div>
             <div v-else class="tree-list">
               <ProjectTreeRow
                 v-for="node in visibleNodes"
@@ -369,7 +529,8 @@ const closeEditor = async () => {
                 :node="node"
                 :depth="0"
                 :expanded-paths="expandedPaths"
-                :query="normalizedQuery"
+                :loading-paths="loadingDirectoryPaths"
+                :query="''"
                 :selected-path="selectedFile"
                 @toggle="togglePath"
                 @open-file="loadFile"
@@ -430,7 +591,7 @@ const closeEditor = async () => {
 
       <div class="panel-footer">
         <span>{{ hasEditor ? '修改会自动写回项目文件' : '点击文件可在右侧打开编辑' }}</span>
-        <span v-if="treeData?.truncated" class="footer-warning">已裁剪显示</span>
+        <span v-if="treeData?.truncated" class="footer-warning">根目录项过多，当前仅展示部分内容</span>
       </div>
     </div>
 
@@ -762,6 +923,65 @@ const closeEditor = async () => {
   gap: 0;
 }
 
+.search-result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.search-result-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.search-result-row:hover,
+.search-result-row.is-selected {
+  background: var(--bg-secondary, #f3f4f6);
+  color: var(--text-primary, #111827);
+}
+
+.search-result-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.search-result-name {
+  color: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.search-result-path {
+  color: var(--text-muted, #9ca3af);
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.tree-icon.file {
+  color: #c96a2d;
+}
+
 .editor-column {
   display: flex;
   flex-direction: column;
@@ -868,6 +1088,17 @@ const closeEditor = async () => {
 
 .footer-warning {
   color: #b45309;
+}
+
+@media (prefers-color-scheme: dark) {
+  .search-result-row:hover,
+  .search-result-row.is-selected {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .tree-icon.file {
+    color: #e5a67d;
+  }
 }
 
 @media (max-width: 1480px) {

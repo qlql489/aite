@@ -282,6 +282,24 @@ impl StdinSessionManager {
                                         ctrl_resp.response.response.clone()
                                     {
                                         if response_value.get("commands").is_some() {
+                                            match serde_json::to_string_pretty(&response_value) {
+                                                Ok(pretty_json) => {
+                                                    info!(
+                                                        "📋 Initialize raw response:\n{}",
+                                                        pretty_json
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    warn!(
+                                                        "Failed to pretty print initialize response: {}",
+                                                        e
+                                                    );
+                                                    info!(
+                                                        "📋 Initialize raw response (compact): {}",
+                                                        response_value
+                                                    );
+                                                }
+                                            }
                                             match serde_json::from_value::<InitializeResponse>(
                                                 response_value,
                                             ) {

@@ -507,7 +507,7 @@ async function handleCopyDescription() {
         </div>
 
         <!-- 操作按钮 -->
-        <div v-else class="permission-actions-inline permission-actions-compact">
+        <div v-else class="permission-actions-inline">
           <button
             :class="['btn-action', 'btn-approve-simple', { selected: selectedButtonIndex === 0 }]"
             @click.stop="emit('approve', permission.request_id)"

@@ -13,6 +13,7 @@ const props = defineProps<{
   node: ProjectTreeNode;
   depth: number;
   expandedPaths: Set<string>;
+  loadingPaths: Set<string>;
   query: string;
   selectedPath: string;
 }>();
@@ -23,6 +24,7 @@ const emit = defineEmits<{
 }>();
 
 const isExpanded = computed(() => props.expandedPaths.has(props.node.path));
+const isLoading = computed(() => props.loadingPaths.has(props.node.path));
 const hasChildren = computed(
   () => props.node.is_dir && (props.node.children.length > 0 || props.node.has_unloaded_children)
 );
@@ -58,7 +60,10 @@ const onRowClick = () => {
       :style="{ '--depth': depth }"
       @click="onRowClick"
     >
-      <span class="tree-caret" :class="{ open: isExpanded, hidden: !hasChildren }">›</span>
+      <span class="tree-caret" :class="{ open: isExpanded, hidden: !hasChildren, loading: isLoading }">
+        <span v-if="isLoading" class="tree-spinner" aria-hidden="true"></span>
+        <template v-else>›</template>
+      </span>
       <span class="tree-icon" :class="node.is_dir ? 'dir' : 'file'">
         <svg v-if="node.is_dir" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path d="M2.5 4.5H6L7.4 6H13.5V12.5H2.5V4.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
@@ -78,6 +83,7 @@ const onRowClick = () => {
         :node="child"
         :depth="depth + 1"
         :expanded-paths="expandedPaths"
+        :loading-paths="loadingPaths"
         :query="query"
         :selected-path="selectedPath"
         @toggle="$emit('toggle', $event)"
@@ -132,8 +138,22 @@ const onRowClick = () => {
   transform: rotate(90deg);
 }
 
+.tree-caret.loading {
+  transform: none;
+}
+
 .tree-caret.hidden {
   opacity: 0;
+}
+
+.tree-spinner {
+  display: inline-flex;
+  width: 9px;
+  height: 9px;
+  border: 1.4px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  animation: tree-spin 0.7s linear infinite;
 }
 
 .tree-icon {
@@ -163,6 +183,12 @@ const onRowClick = () => {
 .tree-children {
   display: flex;
   flex-direction: column;
+}
+
+@keyframes tree-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (prefers-color-scheme: dark) {

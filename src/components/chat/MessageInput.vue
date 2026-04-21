@@ -631,8 +631,8 @@ const parseDraftCommandChip = (text: string) => {
   };
 };
 
-const updateCurrentSessionDraft = (text: string) => {
-  const sessionId = props.sessionId?.trim();
+const updateCurrentSessionDraft = (text: string, targetSessionId?: string) => {
+  const sessionId = (targetSessionId ?? props.sessionId)?.trim();
   if (!sessionId) return;
 
   const nextDrafts = new Map(sessionDrafts.value);
@@ -691,7 +691,7 @@ const shouldShowSlashMenu = computed(() => {
 
 const handleSessionBindingChange = async (newSessionId?: string, oldSessionId?: string) => {
   if (oldSessionId && oldSessionId !== newSessionId) {
-    updateCurrentSessionDraft(editorText.value);
+    updateCurrentSessionDraft(editorText.value, oldSessionId);
   }
 
   fileReferences.value = [];
@@ -742,6 +742,9 @@ watch(fileSearchQuery, () => {
   selectedFileMenuIndex.value = 0;
 
   if (!showFileMenu.value) return;
+  if (fileMenuRef.value) {
+    fileMenuRef.value.scrollTop = 0;
+  }
   queueProjectFileSearch();
 });
 
@@ -751,12 +754,22 @@ watch(projectFiles, (files) => {
   }
 });
 
+const scrollSelectedFileMenuItemIntoView = () => {
+  if (!showFileMenu.value) return;
+
+  void nextTick(() => {
+    const selected = fileMenuRef.value?.querySelector(`[data-file-index="${selectedFileMenuIndex.value}"]`) as HTMLElement | null;
+    selected?.scrollIntoView({ block: 'nearest' });
+  });
+};
+
+watch(selectedFileMenuIndex, () => {
+  scrollSelectedFileMenuItemIntoView();
+});
+
 watch(showFileMenu, (isOpen) => {
   if (isOpen) {
-    void nextTick(() => {
-      const selected = fileMenuRef.value?.querySelector(`[data-file-index="${selectedFileMenuIndex.value}"]`) as HTMLElement | null;
-      selected?.scrollIntoView({ block: 'nearest' });
-    });
+    scrollSelectedFileMenuItemIntoView();
   }
 });
 
@@ -2297,7 +2310,7 @@ onUnmounted(() => {
         ref="editorRef"
         class="message-input-editor"
         :class="{ 'is-empty': !editorRef?.innerText.trim() }"
-        :placeholder="disabled ? '未连接' : streaming ? '输入消息打断 AI 响应...' : '输入消息... (/ 查看命令)'"
+        :placeholder="disabled ? '未连接' : streaming ? '输入消息打断 AI 响应...' : '输入消息... (/ 查看命令 @添加文件)'"
         :disabled="disabled"
         contenteditable="true"
         @keydown="handleKeyDown"
@@ -2722,14 +2735,16 @@ onUnmounted(() => {
 .message-input-editor :deep(.file-reference-chip) {
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.28rem;
   max-width: min(100%, 240px);
-  padding: 0.28rem 0.56rem;
-  margin: 0.125rem;
+  min-height: 1.45rem;
+  padding: 0.1rem 0.42rem;
+  margin: 0 0.125rem;
   background: linear-gradient(180deg, rgba(250, 246, 238, 0.96), rgba(241, 235, 226, 0.92));
   border: 1px solid rgba(167, 148, 123, 0.34);
-  border-radius: 0.65rem;
-  font-size: 0.8rem;
+  border-radius: 0.5rem;
+  font-size: 0.78rem;
+  line-height: 1.1;
   color: #644c34;
   user-select: none;
   vertical-align: middle;
@@ -2738,6 +2753,8 @@ onUnmounted(() => {
 
 .message-input-editor :deep(.file-reference-chip) svg {
   flex-shrink: 0;
+  width: 11px;
+  height: 11px;
   color: currentColor;
   opacity: 0.82;
 }
@@ -2756,14 +2773,14 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border: none;
   background: transparent;
   color: currentColor;
   cursor: pointer;
   border-radius: 999px;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1;
   padding: 0;
   opacity: 0.7;

@@ -1593,6 +1593,7 @@ onBeforeUnmount(() => {
                         :node="node"
                         :depth="0"
                         :expanded-paths="skillExpandedPaths"
+                        :loading-paths="new Set()"
                         :query="skillTreeQuery.trim().toLowerCase()"
                         :selected-path="selectedSkillTreeFile"
                         @toggle="toggleSkillTreePath"
@@ -1905,11 +1906,10 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- MCP 添加/编辑对话框 -->
-    <div v-if="showMcpDialog" class="dialog-overlay" @click.self="showMcpDialog = false">
-      <div class="dialog dialog-wide">
+    <div v-if="showMcpDialog" class="dialog-overlay">
+      <div class="dialog dialog-wide dialog-mcp">
         <div class="dialog-header">
           <h3>{{ editingMcpServer ? `编辑 MCP 服务器: ${editingMcpServer.id}` : '添加 MCP 服务器' }}</h3>
-          <button class="close-btn" @click="showMcpDialog = false">×</button>
         </div>
         <div class="dialog-body">
           <!-- 服务器名称 -->
@@ -1942,11 +1942,11 @@ onBeforeUnmount(() => {
           </div>
 
           <!-- JSON 模式 -->
-          <div v-if="mcpEditMode === 'json'" class="form-group">
+          <div v-if="mcpEditMode === 'json'" class="form-group mcp-json-form-group">
             <label>服务器配置 (JSON)</label>
             <textarea
               v-model="mcpJsonText"
-              class="form-textarea form-mono"
+              class="form-textarea form-mono mcp-json-textarea"
               placeholder='{"command": "npx", "args": ["-y", "@server/name"]}'
             ></textarea>
           </div>
@@ -2635,6 +2635,12 @@ onBeforeUnmount(() => {
   width: 640px;
 }
 
+.dialog-mcp {
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
 .dialog-header {
   display: flex;
   justify-content: space-between;
@@ -2661,6 +2667,12 @@ onBeforeUnmount(() => {
   padding: 1.5rem;
   max-height: 60vh;
   overflow-y: auto;
+}
+
+.dialog-mcp .dialog-body {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
 }
 
 .dialog-footer {
@@ -3031,6 +3043,17 @@ onBeforeUnmount(() => {
 .dialog-wide {
   width: 550px;
   max-height: 85vh;
+}
+
+.mcp-json-form-group {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mcp-json-textarea {
+  min-height: 360px;
+  height: min(60vh, 560px);
 }
 
 .edit-mode-toggle {

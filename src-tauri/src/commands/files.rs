@@ -44,6 +44,13 @@ pub struct ProjectTreeResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ProjectTreeChildrenResponse {
+    pub path: String,
+    pub children: Vec<ProjectTreeNode>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ProjectFileResponse {
     pub path: String,
     pub content: String,
@@ -142,19 +149,7 @@ fn dir_has_visible_entries(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn scan_directory(
-    root: &Path,
-    current: &Path,
-    depth: usize,
-    max_depth: usize,
-    max_entries: usize,
-    stats: &mut TreeStats,
-) -> Result<Vec<ProjectTreeNode>, String> {
-    if stats.displayed_entries >= max_entries {
-        stats.truncated = true;
-        return Ok(Vec::new());
-    }
-
+fn collect_directory_entries(current: &Path) -> Result<(Vec<fs::DirEntry>, Vec<fs::DirEntry>), String> {
     let entries = fs::read_dir(current)
         .map_err(|error| format!("Failed to read directory {}: {}", current.display(), error))?;
 
@@ -179,6 +174,69 @@ fn scan_directory(
 
     dirs.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
     files.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
+
+    Ok((dirs, files))
+}
+
+fn build_project_tree_node(root: &Path, entry: fs::DirEntry) -> ProjectTreeNode {
+    let entry_path = entry.path();
+    let file_name = entry.file_name().to_string_lossy().to_string();
+    let relative_path = entry_path
+        .strip_prefix(root)
+        .unwrap_or(&entry_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let file_type = entry.file_type().ok();
+    let is_dir = file_type
+        .as_ref()
+        .map(|kind| kind.is_dir())
+        .unwrap_or(false);
+
+    ProjectTreeNode {
+        name: file_name,
+        path: relative_path,
+        is_dir,
+        children: Vec::new(),
+        has_unloaded_children: is_dir && dir_has_visible_entries(&entry_path),
+    }
+}
+
+fn read_directory_level(
+    root: &Path,
+    current: &Path,
+    max_entries: usize,
+) -> Result<(Vec<ProjectTreeNode>, bool), String> {
+    let (dirs, files) = collect_directory_entries(current)?;
+    let mut nodes = Vec::new();
+    let mut truncated = false;
+
+    for entry in dirs.into_iter().chain(files.into_iter()) {
+        if nodes.len() >= max_entries {
+            truncated = true;
+            break;
+        }
+
+        nodes.push(build_project_tree_node(root, entry));
+    }
+
+    Ok((nodes, truncated))
+}
+
+fn scan_directory(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+    max_depth: usize,
+    max_entries: usize,
+    stats: &mut TreeStats,
+) -> Result<Vec<ProjectTreeNode>, String> {
+    if stats.displayed_entries >= max_entries {
+        stats.truncated = true;
+        return Ok(Vec::new());
+    }
+
+    let (dirs, files) = collect_directory_entries(current)?;
 
     let mut nodes = Vec::new();
 
@@ -249,7 +307,7 @@ pub async fn read_project_tree(
         return Err(format!("Path is not a directory: {}", path));
     }
 
-    let max_depth = depth.unwrap_or(5).max(1);
+    let max_depth = depth.unwrap_or(5);
     let max_entries = max_entries.unwrap_or(4000).max(200);
 
     let mut stats = TreeStats::default();
@@ -269,6 +327,40 @@ pub async fn read_project_tree(
         },
         tree,
         truncated: stats.truncated,
+    })
+}
+
+#[tauri::command]
+pub async fn read_project_tree_children(
+    root_path: String,
+    dir_path: String,
+    max_entries: Option<usize>,
+) -> Result<ProjectTreeChildrenResponse, String> {
+    let root = PathBuf::from(&root_path);
+    if !root.exists() {
+        return Err(format!("Path does not exist: {}", root_path));
+    }
+    if !root.is_dir() {
+        return Err(format!("Path is not a directory: {}", root_path));
+    }
+
+    let resolved_dir = if dir_path.trim().is_empty() {
+        root.clone()
+    } else {
+        resolve_project_path(&root, &dir_path)?
+    };
+
+    if !resolved_dir.is_dir() {
+        return Err(format!("Target path is not a directory: {}", dir_path));
+    }
+
+    let max_entries = max_entries.unwrap_or(5000).max(100);
+    let (children, truncated) = read_directory_level(&root, &resolved_dir, max_entries)?;
+
+    Ok(ProjectTreeChildrenResponse {
+        path: dir_path,
+        children,
+        truncated,
     })
 }
 

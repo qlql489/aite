@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, nextTick } from 'vue';
+import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue';
 import { marked, Renderer, type MarkedExtension } from 'marked';
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
@@ -197,19 +197,11 @@ const renderedHtml = computed(() => {
   }
 });
 
-// 处理代码块交互
-const setupCodeBlockInteractions = () => {
-  if (!containerRef.value) return;
-
-  // 处理复制按钮
-  const copyButtons = containerRef.value.querySelectorAll('.copy-btn');
-  copyButtons.forEach(btn => {
-    btn.addEventListener('click', handleCopyClick);
-  });
-};
-
 const handleCopyClick = (e: Event) => {
-  const target = e.currentTarget as HTMLElement;
+  const target = (e.target as HTMLElement | null)?.closest('.copy-btn') as HTMLElement | null;
+  if (!target) return;
+
+  e.preventDefault();
   const action = target.getAttribute('data-action');
   const codeBlock = target.closest('.enhanced-code-block');
   if (!codeBlock) return;
@@ -226,6 +218,12 @@ const handleCopyClick = (e: Event) => {
     const markdown = `\`\`\`${language}\n${code}\n\`\`\``;
     copyToClipboard(markdown, target);
   }
+};
+
+const handleContainerClick = (e: Event) => {
+  const target = e.target as HTMLElement | null;
+  if (!target?.closest('.copy-btn')) return;
+  handleCopyClick(e);
 };
 
 const clearSearchHighlights = () => {
@@ -320,37 +318,83 @@ const applySearchHighlights = () => {
   });
 };
 
-const copyToClipboard = async (text: string, button: HTMLElement) => {
-  try {
-    await navigator.clipboard.writeText(text);
-
-    // 显示复制成功状态
-    const originalContent = button.innerHTML;
-    button.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="20 6 9 17 4 12"></polyline>
-      </svg>
-      <span>Copied</span>
-    `;
-
-    setTimeout(() => {
-      button.innerHTML = originalContent;
-    }, 2000);
-  } catch {
-    // clipboard not available
+const setCopyButtonState = (button: HTMLElement, label: 'Copied' | 'Failed') => {
+  const originalContent = button.dataset.originalContent || button.innerHTML;
+  if (!button.dataset.originalContent) {
+    button.dataset.originalContent = originalContent;
   }
+
+  const icon = label === 'Copied'
+    ? `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="20 6 9 17 4 12"></polyline>
+      </svg>`
+    : `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <line x1="12" y1="8" x2="12" y2="12"></line>
+        <line x1="12" y1="16" x2="12.01" y2="16"></line>
+      </svg>`;
+
+  button.innerHTML = `
+    ${icon}
+    <span>${label}</span>
+  `;
+
+  window.setTimeout(() => {
+    button.innerHTML = originalContent;
+  }, 2000);
+};
+
+const copyWithExecCommand = (text: string): boolean => {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-9999px';
+  textarea.style.left = '-9999px';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    return document.execCommand('copy');
+  } finally {
+    document.body.removeChild(textarea);
+  }
+};
+
+const copyToClipboard = async (text: string, button: HTMLElement) => {
+  let copied = false;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    }
+  } catch {
+    copied = false;
+  }
+
+  if (!copied) {
+    copied = copyWithExecCommand(text);
+  }
+
+  setCopyButtonState(button, copied ? 'Copied' : 'Failed');
 };
 
 // 监听内容变化，重新设置交互
 watch(() => [props.content, props.searchQuery, props.activeSearchMatch], async () => {
   await nextTick();
-  setupCodeBlockInteractions();
   applySearchHighlights();
 }, { deep: true });
 
 onMounted(() => {
-  setupCodeBlockInteractions();
+  containerRef.value?.addEventListener('click', handleContainerClick);
   applySearchHighlights();
+});
+
+onUnmounted(() => {
+  containerRef.value?.removeEventListener('click', handleContainerClick);
 });
 </script>
 

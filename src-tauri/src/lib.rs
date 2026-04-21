@@ -208,6 +208,7 @@ pub fn run() {
             commands::check_file_access,
             commands::read_file_base64,
             commands::read_project_tree,
+            commands::read_project_tree_children,
             commands::search_project_files,
             commands::read_project_file,
             commands::write_project_file,
