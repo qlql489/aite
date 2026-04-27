@@ -6,8 +6,6 @@
 
 ### 面向 Claude Code 的桌面客户端
 
-让项目管理、会话切换、消息查看、工具调用追踪和权限审批都回到一个清晰的桌面界面里。
-
 [![Release](https://img.shields.io/badge/release-v0.1.0-1688d9?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-97CA00?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2011.2%2B%20%7C%20Windows%2010%2B-blue?style=flat-square)](#)
@@ -29,7 +27,7 @@
 
 Aite 是一个围绕 Claude Code 日常使用体验打造的桌面客户端。
 
-Aite 解决了命令行中使用 Claude Code 的问题：多项目切换麻烦、历史消息难翻、工具调用不透明，提供一个更高效的桌面工作台。
+通过桌面化的多项目管理、流畅的历史消息浏览和清晰的工具调用可视化，让 Claude Code 的使用体验更加高效便捷。
 
 
 <a id="桌面端"></a>
@@ -115,6 +113,7 @@ window系统
 可视化界面替代命令行配置
 - MCP Server、skills、commands 统一管理
 - 模型切换与思考强度选择
+- 支持接入自定义大模型（兼容 Anthropic/OpenAI 协议）
 - Token usage 统计与 CLI 参数配置
 
 <a id="架构概览"></a>

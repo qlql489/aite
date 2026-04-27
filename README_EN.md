@@ -29,7 +29,7 @@ Bring project management, session switching, message browsing, tool call trackin
 
 Aite is a desktop client built around the daily Claude Code workflow.
 
-Aite addresses the friction of using Claude Code purely in the terminal: switching across projects is cumbersome, browsing history is tedious, and tool activity lacks visibility. It provides a more efficient desktop workspace for those flows.
+With a desktop-native experience for multi-project management, fluid history browsing, and clear tool call visualization, Aite makes using Claude Code more efficient and enjoyable.
 
 <a id="desktop-preview"></a>
 ## Desktop Preview
@@ -126,6 +126,7 @@ Replace command-line-heavy configuration with a visual interface.
 
 - Unified management for MCP servers, skills, and commands
 - Model switching and thinking-level selection
+- Support for custom LLMs (Anthropic/OpenAI protocol compatible)
 - Token usage statistics and CLI argument configuration
 
 <a id="architecture-overview"></a>
