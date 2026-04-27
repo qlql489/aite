@@ -19,7 +19,18 @@ import MessageInput from './chat/MessageInput.vue';
 import ThinkingAnimation from './chat/ThinkingAnimation.vue';
 import { extractTodoWritePanelState } from '../utils/todoWrite';
 import type { Message, ModelUsageData } from './chat';
-import type { GitInfo, OutgoingMessagePayload, PermissionMode, ThinkingLevel, TokenUsage } from '../types';
+import type {
+  GitInfo,
+  OutgoingMessagePayload,
+  PermissionMode,
+  ThinkingLevel,
+  TokenUsage,
+  SubagentToolUseEventPayload,
+  SubagentToolInputDeltaEventPayload,
+  SubagentToolResultStartEventPayload,
+  SubagentToolResultDeltaEventPayload,
+  SubagentToolResultCompleteEventPayload,
+} from '../types';
 import { buildRewindSummary, parseRewindTurns, type RewindAction, type RewindTurn } from '../utils/rewind';
 
 // 初始化 stores
@@ -263,6 +274,7 @@ const restoreHistoryMessages = (
       toolResultErrors: msg.toolResultErrors || {},
       timestamp: normalizeMessageTimestamp(msg.timestamp ?? msg.createdAt),
       checkpointUuid: msg.checkpointUuid,
+      parentToolUseId: msg.parent_tool_use_id ?? msg.parentToolUseId,
       model,
       tokenUsage,
       usage: tokenUsage,
@@ -498,6 +510,16 @@ const suppressProjectClick = ref(false);
 const isSettingsVisible = ref(false);
 const appVersion = tauriConfig.version;
 const projectSearchQuery = ref('');
+const projectSortMode = ref<'project' | 'time' | 'chat'>('project');
+const isProjectSortMenuOpen = ref(false);
+const projectSortMenuRef = ref<HTMLElement | null>(null);
+const projectSortButtonRef = ref<HTMLElement | null>(null);
+
+const projectSortOptions = [
+  { value: 'project' as const, label: '按项目' },
+  { value: 'time' as const, label: '时间顺序列表' },
+  { value: 'chat' as const, label: '聊天优先' },
+];
 
 const normalizeProjectSearch = (value: string): string => value.trim().toLocaleLowerCase();
 
@@ -520,9 +542,71 @@ const matchesProjectSearch = (projectName: string, query: string): boolean => {
 };
 
 const isProjectSearchActive = computed(() => normalizeProjectSearch(projectSearchQuery.value).length > 0);
-const filteredDisplayProjects = computed(() =>
-  displayProjects.value.filter(project => matchesProjectSearch(project.name, projectSearchQuery.value))
-);
+
+const getProjectLatestConversationTimestamp = (projectId: number): number => {
+  let latestTimestamp = 0;
+  for (const conversation of conversations.value) {
+    if (conversation.projectId !== projectId) continue;
+    latestTimestamp = Math.max(latestTimestamp, conversation.timestamp || 0);
+  }
+  return latestTimestamp;
+};
+
+const filteredDisplayProjects = computed(() => {
+  const filtered = displayProjects.value.filter(project =>
+    matchesProjectSearch(project.name, projectSearchQuery.value)
+  );
+
+  if (projectSortMode.value === 'project') {
+    return filtered;
+  }
+
+  const sorted = [...filtered];
+
+  if (projectSortMode.value === 'time') {
+    sorted.sort((a, b) => {
+      const timeDiff = new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
+      if (timeDiff !== 0) return timeDiff;
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+    return sorted;
+  }
+
+  sorted.sort((a, b) => {
+    const chatDiff = getProjectLatestConversationTimestamp(b.id) - getProjectLatestConversationTimestamp(a.id);
+    if (chatDiff !== 0) return chatDiff;
+
+    const timeDiff = new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime();
+    if (timeDiff !== 0) return timeDiff;
+
+    return a.name.localeCompare(b.name, 'zh-CN');
+  });
+  return sorted;
+});
+
+const currentProjectSortLabel = computed(() => {
+  return projectSortOptions.find(option => option.value === projectSortMode.value)?.label || '按项目';
+});
+
+const toggleProjectSortMenu = () => {
+  isProjectSortMenuOpen.value = !isProjectSortMenuOpen.value;
+};
+
+const selectProjectSortMode = (mode: 'project' | 'time' | 'chat') => {
+  projectSortMode.value = mode;
+  isProjectSortMenuOpen.value = false;
+};
+
+const handleProjectSortOutsideClick = (event: MouseEvent) => {
+  if (!isProjectSortMenuOpen.value) return;
+
+  const target = event.target as Node | null;
+  if (projectSortMenuRef.value?.contains(target) || projectSortButtonRef.value?.contains(target)) {
+    return;
+  }
+
+  isProjectSortMenuOpen.value = false;
+};
 
 // 监听 projects 变化，同步到 displayProjects
 watch(() => projects.value, (newProjects) => {
@@ -575,6 +659,7 @@ const getDropIndex = (clientY: number): number => {
 // 项目鼠标按下
 const handleProjectMouseDown = (event: MouseEvent, projectId: number) => {
   if (isProjectSearchActive.value) return;
+  if (projectSortMode.value !== 'project') return;
   if (event.button !== 0) return;
 
   const target = event.target as HTMLElement | null;
@@ -1340,6 +1425,7 @@ const isProjectExpanded = (projectId: number) => {
 // 选中聊天记录
 const selectConversation = async (conv: Conversation) => {
   console.log('[selectConversation] START ====', { convId: conv.id, convTitle: conv.title });
+  const selectionRequestId = ++conversationSelectionRequestId.value;
   persistCurrentSessionMessages();
   selectedConversation.value = conv;
   console.log('[selectConversation] selectedConversation set:', selectedConversation.value?.id);
@@ -1382,6 +1468,16 @@ const selectConversation = async (conv: Conversation) => {
         sessionId: existingSessionId
       });
 
+      if (!isConversationSelectionStillCurrent(selectionRequestId, conv.id)) {
+        console.log('[selectConversation] Selection changed while checking existing session, abort apply:', {
+          convId: conv.id,
+          selectionRequestId,
+          currentSelectionRequestId: conversationSelectionRequestId.value,
+          currentSelectedConversationId: selectedConversation.value?.id || null,
+        });
+        return;
+      }
+
       if (sessionExists) {
         // Session 仍然活跃，直接复用
         console.log(`Reusing existing session: ${existingSessionId} for conversation: ${conv.id}`);
@@ -1393,12 +1489,22 @@ const selectConversation = async (conv: Conversation) => {
         // 复用会话时，设置为 connected（因为会话已经存在）
         claudeStore.setConnectionStatus(existingSessionId, 'connected');
 
-        if ((claudeStore.messages.get(existingSessionId)?.length || 0) > 0 || claudeStore.streaming.has(existingSessionId)) {
+        if (claudeStore.streaming.has(existingSessionId)) {
           console.log('[selectConversation] Restored conversation from session snapshot:', existingSessionId);
           return;
         }
 
-        await reloadConversationHistory(conv, { forceApply: true });
+        if ((claudeStore.messages.get(existingSessionId)?.length || 0) > 0) {
+          console.log('[selectConversation] Snapshot restored, reloading history to refresh nested subagent state:', existingSessionId);
+          await reloadConversationHistory(conv, {
+            forceApply: true,
+            preserveCurrentMessagesOnError: true,
+            selectionRequestId,
+          });
+          return;
+        }
+
+        await reloadConversationHistory(conv, { forceApply: true, selectionRequestId });
         return;
       } else {
         // Session 已失效，清理映射
@@ -1415,7 +1521,10 @@ const selectConversation = async (conv: Conversation) => {
     // 立即加载历史消息（不需要等待 session 创建完成）
     const loadHistory = async () => {
       console.log('[selectConversation] Loading history messages...');
-      await reloadConversationHistory(conv, { preserveCurrentMessagesOnError: false });
+      await reloadConversationHistory(conv, {
+        preserveCurrentMessagesOnError: false,
+        selectionRequestId,
+      });
     };
 
     // 并行执行：立即加载历史消息 + 创建 session
@@ -1440,6 +1549,16 @@ const selectConversation = async (conv: Conversation) => {
             sessionId,
             areEqual: sessionId === conv.id
           });
+          const shouldApplyCreatedSessionToCurrentView = isConversationSelectionStillCurrent(selectionRequestId, conv.id);
+          if (!shouldApplyCreatedSessionToCurrentView) {
+            console.log('[selectConversation] Selection changed before session creation settled, skip current-view apply:', {
+              convId: conv.id,
+              sessionId,
+              selectionRequestId,
+              currentSelectionRequestId: conversationSelectionRequestId.value,
+              currentSelectedConversationId: selectedConversation.value?.id || null,
+            });
+          }
 
           // 刷新活动 Session 列表
           refreshActiveSessions();
@@ -1448,9 +1567,6 @@ const selectConversation = async (conv: Conversation) => {
           const sessionMap = new Map(conversationSessionMap.value);
           sessionMap.set(conv.id, sessionId);
           conversationSessionMap.value = sessionMap;
-
-          currentSessionId.value = sessionId;
-          workingDirectorySet.value = true;
 
           // 在前端创建基本的会话状态
           const sessionData = {
@@ -1464,10 +1580,14 @@ const selectConversation = async (conv: Conversation) => {
             createdAt: Date.now(),
           };
           claudeStore.addSession(sessionData);
-          applySessionMessagesToCurrentView(
-            sessionId,
-            claudeStore.messages.get(sessionId) || [],
-          );
+          if (shouldApplyCreatedSessionToCurrentView) {
+            currentSessionId.value = sessionId;
+            workingDirectorySet.value = true;
+            applySessionMessagesToCurrentView(
+              sessionId,
+              claudeStore.messages.get(sessionId) || [],
+            );
+          }
 
           if (sessionData.permissionMode !== 'default') {
             // 临时注释：创建 session 后先不自动下发 set_permission_mode
@@ -1599,6 +1719,11 @@ const currentStreamingStartedAt = computed(() => {
   return currentSessionId.value
     ? claudeStore.streamingStartedAt.get(currentSessionId.value) || null
     : null;
+});
+const currentSubagentRuntime = computed(() => {
+  return currentSessionId.value
+    ? claudeStore.subagentRuntime.get(currentSessionId.value) || new Map()
+    : new Map();
 });
 const streamingPlaceholderIds = ref<Map<string, string>>(new Map());
 const streamDataReceivedBySession = ref<Map<string, boolean>>(new Map());
@@ -1923,8 +2048,56 @@ const applySessionMessagesToCurrentView = (sessionId: string, nextMessages: Mess
 const extractMessageContentBlocks = (msg: any, messageData: any): any[] => {
   const rawContent = messageData.content;
 
+  const tryParseStructuredString = (value: string): any[] => {
+    const candidates = [value];
+
+    try {
+      const parsed = JSON.parse(value);
+      if (typeof parsed === 'string') {
+        candidates.push(parsed);
+      } else if (Array.isArray(parsed)) {
+        return parsed;
+      } else if (parsed && typeof parsed === 'object') {
+        if (Array.isArray((parsed as any).content)) return (parsed as any).content;
+        if (Array.isArray((parsed as any).Blocks)) return (parsed as any).Blocks;
+        if (Array.isArray((parsed as any).blocks)) return (parsed as any).blocks;
+      }
+    } catch {
+      // ignore
+    }
+
+    for (const candidate of candidates) {
+      const normalized = candidate
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t');
+
+      if (normalized === candidate) continue;
+
+      try {
+        const reparsed = JSON.parse(normalized);
+        if (Array.isArray(reparsed)) return reparsed;
+        if (reparsed && typeof reparsed === 'object') {
+          if (Array.isArray((reparsed as any).content)) return (reparsed as any).content;
+          if (Array.isArray((reparsed as any).Blocks)) return (reparsed as any).Blocks;
+          if (Array.isArray((reparsed as any).blocks)) return (reparsed as any).blocks;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return [];
+  };
+
   if (Array.isArray(rawContent)) {
     return rawContent;
+  }
+  if (typeof rawContent === 'string') {
+    const parsedBlocks = tryParseStructuredString(rawContent);
+    if (parsedBlocks.length > 0) {
+      return parsedBlocks;
+    }
   }
   if (Array.isArray(msg.contentBlocks)) {
     return msg.contentBlocks;
@@ -1943,26 +2116,24 @@ const extractMessageContentBlocks = (msg: any, messageData: any): any[] => {
 };
 
 const extractMessageContentText = (rawContent: any, contentBlocks: any[]): string => {
+  if (contentBlocks.length > 0) {
+    const textBlocks = contentBlocks.filter((block: any) => block.type === 'text');
+    const joinedText = textBlocks
+      .map((block: any) => block.content ?? block.text ?? '')
+      .join('\n');
+
+    if (joinedText) {
+      return joinedText;
+    }
+
+    if (contentBlocks.some((block: any) => block.type === 'tool_result')) {
+      const toolResult = contentBlocks.find((block: any) => block.type === 'tool_result');
+      return (toolResult && (toolResult.content ?? toolResult.text)) ?? '';
+    }
+  }
+
   if (typeof rawContent === 'string') {
     return rawContent;
-  }
-
-  if (contentBlocks.length === 0) {
-    return '';
-  }
-
-  const textBlocks = contentBlocks.filter((block: any) => block.type === 'text');
-  const joinedText = textBlocks
-    .map((block: any) => block.content ?? block.text ?? '')
-    .join('\n');
-
-  if (joinedText) {
-    return joinedText;
-  }
-
-  if (contentBlocks.some((block: any) => block.type === 'tool_result')) {
-    const toolResult = contentBlocks.find((block: any) => block.type === 'tool_result');
-    return (toolResult && (toolResult.content ?? toolResult.text)) ?? '';
   }
 
   return '';
@@ -2622,6 +2793,24 @@ function getActualSessionIdForConversation(conversationId: string): string | nul
   return conversationSessionMap.value.get(conversationId) || null;
 }
 
+function getSessionPermissionKeys(sessionId: string): string[] {
+  const keys = new Set<string>([sessionId]);
+
+  const mappedSessionId = conversationSessionMap.value.get(sessionId);
+  if (mappedSessionId) {
+    keys.add(mappedSessionId);
+  }
+
+  for (const [conversationId, actualSessionId] of conversationSessionMap.value.entries()) {
+    if (conversationId === sessionId || actualSessionId === sessionId) {
+      keys.add(conversationId);
+      keys.add(actualSessionId);
+    }
+  }
+
+  return Array.from(keys);
+}
+
 function resetChatSelection() {
   selectedConversation.value = null;
   messages.value = [];
@@ -2802,8 +2991,10 @@ function hasPendingPermission(sessionId: string): boolean {
     return false;
   }
 
-  const sessionPermissions = claudeStore.pendingPermissions.get(sessionId);
-  return Boolean(sessionPermissions && sessionPermissions.size > 0);
+  return getSessionPermissionKeys(sessionId).some((key) => {
+    const sessionPermissions = claudeStore.pendingPermissions.get(key);
+    return Boolean(sessionPermissions && sessionPermissions.size > 0);
+  });
 }
 
 
@@ -2833,6 +3024,7 @@ const sessionSearchQuery = ref('');
 const sessionSearchMatchCount = ref(0);
 const sessionSearchActiveIndex = ref(0);
 const sessionSearchInputRef = ref<HTMLInputElement | null>(null);
+const conversationSelectionRequestId = ref(0);
 
 const hasSessionSearchQuery = computed(() => sessionSearchQuery.value.trim().length > 0);
 const hasSessionSearchResults = computed(() => sessionSearchMatchCount.value > 0);
@@ -2841,6 +3033,11 @@ const sessionSearchStatusText = computed(() => {
   if (!hasSessionSearchResults.value) return '无结果';
   return `${sessionSearchActiveIndex.value + 1} / ${sessionSearchMatchCount.value}`;
 });
+
+function isConversationSelectionStillCurrent(requestId: number, conversationId: string): boolean {
+  return conversationSelectionRequestId.value === requestId
+    && selectedConversation.value?.id === conversationId;
+}
 
 // 当前项目名称
 const currentProjectName = computed(() => {
@@ -3173,6 +3370,7 @@ const reloadConversationHistory = async (
   options: {
     forceApply?: boolean;
     preserveCurrentMessagesOnError?: boolean;
+    selectionRequestId?: number;
   } = {},
 ) => {
   const project = projects.value.find(p => p.id === conversation.projectId);
@@ -3197,7 +3395,10 @@ const reloadConversationHistory = async (
 
     claudeStore.setMessages(targetSessionId, cloneMessages(restoredMessages));
 
-    if (options.forceApply || targetSessionId === currentSessionId.value) {
+    const canApplyToCurrentView = options.selectionRequestId == null
+      || isConversationSelectionStillCurrent(options.selectionRequestId, conversation.id);
+
+    if ((options.forceApply || targetSessionId === currentSessionId.value) && canApplyToCurrentView) {
       applySessionMessagesToCurrentView(targetSessionId, restoredMessages);
     }
 
@@ -3210,7 +3411,10 @@ const reloadConversationHistory = async (
   } catch (error) {
     console.error('[History] Failed to reload conversation history:', error);
 
-    if (options.forceApply || (!options.preserveCurrentMessagesOnError && targetSessionId === currentSessionId.value)) {
+    const canApplyErrorToCurrentView = options.selectionRequestId == null
+      || isConversationSelectionStillCurrent(options.selectionRequestId, conversation.id);
+
+    if ((options.forceApply || (!options.preserveCurrentMessagesOnError && targetSessionId === currentSessionId.value)) && canApplyErrorToCurrentView) {
       const errorMessage = buildHistoryLoadErrorMessage(error);
       claudeStore.setMessages(targetSessionId, [cloneMessage(errorMessage)]);
       applySessionMessagesToCurrentView(targetSessionId, [errorMessage]);
@@ -3342,6 +3546,11 @@ let unlistenSessionCreated: UnlistenFn | null = null;
 let unlistenSessionIdUpdated: UnlistenFn | null = null;
 let unlistenCommandsUpdated: UnlistenFn | null = null;
 let unlistenUserCheckpoint: UnlistenFn | null = null;
+let unlistenSubagentToolUse: UnlistenFn | null = null;
+let unlistenSubagentToolInputDelta: UnlistenFn | null = null;
+let unlistenSubagentToolResultStart: UnlistenFn | null = null;
+let unlistenSubagentToolResultDelta: UnlistenFn | null = null;
+let unlistenSubagentToolResultComplete: UnlistenFn | null = null;
 
 // 连接状态刷新定时器
 let connectionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3359,6 +3568,11 @@ const getConversationConnectionStatus = (conv: Conversation) => {
   return claudeStore.connectionStatus.get(conv.id) || 'disconnected';
 };
 
+const hasConversationCompletion = (conv: Conversation) => {
+  const sessionId = conversationSessionMap.value.get(conv.id) || conv.id;
+  return claudeStore.hasUnreadTaskCompletion(sessionId) || claudeStore.hasUnreadMessageCompletion(sessionId);
+};
+
 // 获取连接状态文本
 const getConnectionStatusText = (status: string) => {
   switch (status) {
@@ -3373,6 +3587,12 @@ const getConnectionStatusText = (status: string) => {
 const isConversationStreaming = (conv: Conversation) => {
   const sessionId = conversationSessionMap.value.get(conv.id) || conv.id;
   return claudeStore.streaming.has(sessionId);
+};
+
+const getConversationStatusDotTitle = (conv: Conversation) => {
+  if (isConversationStreaming(conv)) return '正在执行...';
+  if (hasConversationCompletion(conv)) return '执行完成';
+  return getConnectionStatusText(getConversationConnectionStatus(conv));
 };
 
 // 播放完成提示音
@@ -3403,6 +3623,7 @@ const playCompletionSound = () => {
 onMounted(async () => {
   window.addEventListener('keydown', handleWindowSearchShortcut);
   window.addEventListener('resize', syncWorkspacePanelWidth);
+  document.addEventListener('mousedown', handleProjectSortOutsideClick);
   leftPanelWidth.value = clampLeftPanelWidth(leftPanelWidth.value);
 
   // 测试 Store 插件
@@ -3588,6 +3809,7 @@ onMounted(async () => {
     const sessionId = event.payload;
     console.log('[STREAM] Stream start event received for session:', sessionId);
     clearSessionManualStop(sessionId);
+    claudeStore.clearSessionSubagentRuntime(sessionId);
     claudeStore.setSessionStatus(sessionId, 'running');
     // 更新 claudeStore.streaming 状态
     claudeStore.setStreaming(sessionId, '');
@@ -3636,6 +3858,7 @@ onMounted(async () => {
     const { sessionId, message } = event.payload;
     console.log('[STREAM] Stream end event received for session:', sessionId, message);
     const shouldSkipUsageRefresh = consumeSessionManualStop(sessionId);
+    claudeStore.finalizeSessionSubagentRuntime(sessionId);
 
     claudeStore.setSessionStatus(sessionId, 'idle');
 
@@ -3968,13 +4191,53 @@ onMounted(async () => {
         messages.value.push(convertedMsg);
       }
 
-      // 输入框 token 圆环只在 stream_end 时更新，避免中间消息用到不完整的 usage/modelUsage。
-    } catch (error) {
+    // 输入框 token 圆环只在 stream_end 时更新，避免中间消息用到不完整的 usage/modelUsage。
+  } catch (error) {
       console.error('[MESSAGE] Failed to process incoming message:', error, msg);
       appendMessageParseError(msg, error);
     }
 
   });
+
+  unlistenSubagentToolUse = await listen<SubagentToolUseEventPayload>(
+    'claude:subagent_tool_use',
+    (event) => {
+      const data = event.payload;
+      claudeStore.upsertSubagentToolUse(data.sessionId, data);
+    },
+  );
+
+  unlistenSubagentToolInputDelta = await listen<SubagentToolInputDeltaEventPayload>(
+    'claude:subagent_tool_input_delta',
+    (event) => {
+      const data = event.payload;
+      claudeStore.appendSubagentToolInputDelta(data.sessionId, data);
+    },
+  );
+
+  unlistenSubagentToolResultStart = await listen<SubagentToolResultStartEventPayload>(
+    'claude:subagent_tool_result_start',
+    (event) => {
+      const data = event.payload;
+      claudeStore.startSubagentToolResult(data.sessionId, data);
+    },
+  );
+
+  unlistenSubagentToolResultDelta = await listen<SubagentToolResultDeltaEventPayload>(
+    'claude:subagent_tool_result_delta',
+    (event) => {
+      const data = event.payload;
+      claudeStore.appendSubagentToolResultDelta(data.sessionId, data);
+    },
+  );
+
+  unlistenSubagentToolResultComplete = await listen<SubagentToolResultCompleteEventPayload>(
+    'claude:subagent_tool_result_complete',
+    (event) => {
+      const data = event.payload;
+      claudeStore.completeSubagentToolResult(data.sessionId, data);
+    },
+  );
 
   unlistenUserCheckpoint = await listen<{
     sessionId: string;
@@ -4049,6 +4312,11 @@ onUnmounted(() => {
   unlistenStreamEnd?.();
   unlistenStreamError?.();
   unlistenMessage?.();
+  unlistenSubagentToolUse?.();
+  unlistenSubagentToolInputDelta?.();
+  unlistenSubagentToolResultStart?.();
+  unlistenSubagentToolResultDelta?.();
+  unlistenSubagentToolResultComplete?.();
   unlistenUserCheckpoint?.();
   unlistenPermission?.();
   unlistenSessionCreated?.();
@@ -4067,6 +4335,7 @@ onUnmounted(() => {
   stopWorkspaceResize();
   window.removeEventListener('keydown', handleWindowSearchShortcut);
   window.removeEventListener('resize', syncWorkspacePanelWidth);
+  document.removeEventListener('mousedown', handleProjectSortOutsideClick);
 
   // 清理页面可见性监听器
   const handler = (window as any).__visibilityChangeHandler;
@@ -4313,6 +4582,9 @@ const stopStreaming = async () => {
     claudeStore.setSessionStatus(sessionId, 'idle');
     claudeStore.setStreaming(sessionId, null);
     claudeStore.setStreamingStats(sessionId, null);
+    for (const key of getSessionPermissionKeys(sessionId)) {
+      claudeStore.clearSessionPermissions(key);
+    }
     finalizeInterruptedStreamingState(sessionId);
   } else {
     messages.value = messages.value.map(msg => ({
@@ -4706,26 +4978,82 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
     <div class="left-panel" :style="{ width: leftPanelWidth + 'px', minWidth: minLeftWidth + 'px' }">
       <div class="section-header">
         <div class="button-row">
-          <button class="btn-open" @click="openFolder">
+          <button class="action-button btn-open" @click="openFolder">
             <HugeiconsIcon :icon="FolderIcon" class="folder-icon-small" />
             <span>打开文件夹</span>
           </button>
-          <button class="btn-import" @click="openImportDialog">
+          <button class="action-button btn-import" @click="openImportDialog">
             <HugeiconsIcon :icon="FileImportIcon" class="folder-icon-small" />
-            <span>导入</span>
+            <span>导入 Claude Code 历史</span>
           </button>
         </div>
       </div>
-      <div class="project-search-bar">
-        <label class="project-search-input-wrap">
+      <div class="project-toolbar">
+        <div class="project-toolbar-title">项目</div>
+        <label class="project-search-input-wrap toolbar-search">
           <HugeiconsIcon :icon="Search01Icon" class="project-search-icon" />
           <input
             v-model="projectSearchQuery"
             type="text"
             class="project-search-input"
-            placeholder="搜索项目名称..."
+            placeholder="搜索项目"
           />
         </label>
+        <div class="project-sort-wrap">
+          <button
+            ref="projectSortButtonRef"
+            type="button"
+            class="project-sort-btn"
+            :title="`排序：${currentProjectSortLabel}`"
+            @click="toggleProjectSortMenu"
+          >
+            <svg viewBox="0 0 20 20" fill="none" class="project-sort-btn-icon" aria-hidden="true">
+              <path d="M4 5H16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M7 10H13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              <path d="M9 15H11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+
+          <div
+            v-if="isProjectSortMenuOpen"
+            ref="projectSortMenuRef"
+            class="project-sort-menu"
+          >
+            <div class="project-sort-menu-title">整理</div>
+            <button
+              v-for="option in projectSortOptions"
+              :key="option.value"
+              type="button"
+              class="project-sort-option"
+              :class="{ active: projectSortMode === option.value }"
+              @click="selectProjectSortMode(option.value)"
+            >
+              <span class="project-sort-option-icon" aria-hidden="true">
+                <svg v-if="option.value === 'project'" viewBox="0 0 20 20" fill="none">
+                  <path d="M2.5 6.5A2 2 0 0 1 4.5 4.5H8l1.5 2H15.5a2 2 0 0 1 2 2v5A2 2 0 0 1 15.5 15.5h-11a2 2 0 0 1-2-2v-7Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                </svg>
+                <svg v-else-if="option.value === 'time'" viewBox="0 0 20 20" fill="none">
+                  <circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.6"/>
+                  <path d="M10 6.5V10.2L12.6 12.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <svg v-else viewBox="0 0 20 20" fill="none">
+                  <path d="M6.2 6.6A4.2 4.2 0 0 1 13.4 5l1.1-1.1V7h-3.1l1.1-1.1A2.8 2.8 0 0 0 7.7 7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M13.8 13.4A4.2 4.2 0 0 1 6.6 15l-1.1 1.1V13h3.1l-1.1 1.1A2.8 2.8 0 0 0 12.3 13" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+              <span class="project-sort-option-label">{{ option.label }}</span>
+              <svg
+                v-if="projectSortMode === option.value"
+                viewBox="0 0 20 20"
+                fill="none"
+                class="project-sort-option-check"
+                aria-hidden="true"
+              >
+                <path d="M4.5 10.5L8 14L15.5 6.5" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
       </div>
       <div class="projects-list" :class="{ dragging: isDragging }">
 
@@ -4823,14 +5151,16 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
               >
                 <!-- 连接状态指示点 -->
                 <span
-                  :class="['conv-status-dot', getConversationConnectionStatus(conv), { streaming: isConversationStreaming(conv), visible: getConversationConnectionStatus(conv) !== 'disconnected' || isConversationStreaming(conv) }]"
-                  :title="isConversationStreaming(conv) ? '正在输出...' : getConnectionStatusText(getConversationConnectionStatus(conv))"
-                ></span>
-                <!-- 任务完成红点 -->
-                <span
-                  v-if="claudeStore.hasUnreadTaskCompletion(conv.id)"
-                  class="task-completion-dot"
-                  title="有任务已完成"
+                  :class="[
+                    'conv-status-dot',
+                    getConversationConnectionStatus(conv),
+                    {
+                      streaming: isConversationStreaming(conv),
+                      completed: !isConversationStreaming(conv) && hasConversationCompletion(conv),
+                      visible: getConversationConnectionStatus(conv) !== 'disconnected' || isConversationStreaming(conv) || hasConversationCompletion(conv),
+                    }
+                  ]"
+                  :title="getConversationStatusDotTitle(conv)"
                 ></span>
                 <!-- Pin 按钮 -->
                 <button
@@ -5088,6 +5418,7 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
               :is-streaming="isStreaming"
               :pending-permissions="pendingPermissions"
               :session-id="currentSessionId || ''"
+              :subagent-runtime="currentSubagentRuntime"
               :rewind-turns="rewindTurns"
               :rewind-busy="rewindBusy"
               :search-query="sessionSearchQuery"
@@ -5220,7 +5551,7 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem;
+  padding: 0.625rem 0.45rem 0.375rem;
   border-bottom: 1px solid var(--border-color, #e5e7eb);
   flex-shrink: 0;
 }
@@ -5239,22 +5570,38 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
   -ms-overflow-style: none;
 }
 
-.project-search-bar {
-  padding: 0.75rem 0.75rem 0;
+.project-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.45rem 0.35rem;
   flex-shrink: 0;
+}
+
+.project-toolbar-title {
+  flex-shrink: 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-muted, #9ca3af);
+  letter-spacing: 0.01em;
 }
 
 .project-search-input-wrap {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.45rem;
   width: 100%;
-  padding: 0.65rem 0.8rem;
+  padding: 0.45rem 0.65rem;
   border: 1px solid var(--border-color, #e5e7eb);
-  border-radius: 0.85rem;
+  border-radius: 999px;
   background: var(--bg-primary, #ffffff);
   color: var(--text-muted, #9ca3af);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.toolbar-search {
+  flex: 1;
+  min-width: 0;
 }
 
 .project-search-input-wrap:focus-within {
@@ -5280,6 +5627,107 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
 
 .project-search-input::placeholder {
   color: var(--text-muted, #9ca3af);
+}
+
+.project-sort-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.project-sort-btn {
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary, #6b7280);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.18s ease, color 0.18s ease;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.project-sort-btn:hover {
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--text-primary, #111827);
+}
+
+.project-sort-btn-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.project-sort-menu {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  width: 220px;
+  padding: 0.55rem;
+  border-radius: 1.1rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+  z-index: 30;
+}
+
+.project-sort-menu-title {
+  padding: 0.35rem 0.45rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted, #9ca3af);
+}
+
+.project-sort-option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.72rem 0.65rem;
+  border: none;
+  border-radius: 0.9rem;
+  background: transparent;
+  color: var(--text-primary, #1f2937);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.18s ease, color 0.18s ease;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.project-sort-option:hover,
+.project-sort-option.active {
+  background: rgba(15, 23, 42, 0.045);
+}
+
+.project-sort-option-icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  color: var(--text-secondary, #6b7280);
+  flex-shrink: 0;
+}
+
+.project-sort-option-icon svg,
+.project-sort-option-check {
+  width: 100%;
+  height: 100%;
+}
+
+.project-sort-option-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.project-sort-option-check {
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-primary, #111827);
+  flex-shrink: 0;
 }
 
 .left-panel-footer {
@@ -5337,57 +5785,49 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
 
 .button-row {
   display: flex;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.125rem;
   width: 100%;
 }
 
-.btn-import {
-  flex: 1;
-  padding: 0.4rem 0.625rem;
-  border-radius: 1rem;
-  font-size: 0.875rem;
+.action-button {
+  width: 100%;
+  min-height: 2.2rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 0.9rem;
+  font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s;
-  background-color: var(--primary-color, #3b82f6);
-  color: #ffffff;
-  border: 1px solid var(--primary-color, #3b82f6);
+  transition: background-color 0.18s ease, color 0.18s ease;
+  background: transparent;
+  color: var(--text-primary, #2f2f2f);
+  border: 1px solid transparent;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
+  justify-content: flex-start;
+  gap: 0.625rem;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
-.btn-import:hover {
-  background-color: var(--primary-hover, #2563eb);
-  border-color: var(--primary-hover, #2563eb);
+.action-button:hover {
+  background: rgba(15, 23, 42, 0.045);
+  color: var(--text-primary, #111827);
 }
 
-.btn-open {
-  flex: 1;
-  padding: 0.4rem 0.625rem;
-  border-radius: 1rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-  background-color: var(--primary-color, #3b82f6);
-  color: #ffffff;
-  border: 1px solid var(--primary-color, #3b82f6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.25rem;
+.action-button:active {
+  background: rgba(15, 23, 42, 0.08);
 }
 
 .folder-icon-small {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
 }
 
-.btn-open:hover {
-  background-color: var(--primary-hover, #2563eb);
-  border-color: var(--primary-hover, #2563eb);
+.btn-open .folder-icon-small,
+.btn-import .folder-icon-small {
+  color: currentColor;
 }
 
 /* 项目包装器 */
@@ -5742,11 +6182,13 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
 
 /* 连接状态指示点 */
 .conv-status-dot {
+  position: relative;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
   opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .conv-status-dot.visible {
@@ -5759,34 +6201,65 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
   box-shadow: 0 0 0 2px var(--primary-color-20, rgba(59, 130, 246, 0.2));
 }
 
-/* 连接中状态 - 黄色点脉冲 */
+/* 连接中状态 */
 .conv-status-dot.connecting {
-  background-color: #f59e0b;
-  animation: pulse 1.5s ease-in-out infinite;
+  background-color: #94a3b8;
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.18);
 }
 
-/* 流式输出中状态 - 主题色点（不带脉冲效果） */
+/* 流式输出中状态 - 小转圈 */
 .conv-status-dot.streaming {
-  background-color: var(--primary-color, #3b82f6);
+  width: 10px;
+  height: 10px;
+  background-color: transparent;
+  border: 1.6px solid rgba(59, 130, 246, 0.22);
+  border-top-color: var(--primary-color, #3b82f6);
+  box-shadow: none;
+  animation: conv-status-spin 0.8s linear infinite;
 }
 
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
+.conv-status-dot.completed {
+  background-color: #16a34a;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.16);
+  animation: conv-status-complete 1.8s ease-in-out infinite;
+}
+
+.conv-status-dot.completed::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  border: 1px solid rgba(22, 163, 74, 0.22);
+  animation: conv-status-complete-ring 1.8s ease-in-out infinite;
+}
+
+@keyframes conv-status-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
-@keyframes pulse-green {
+@keyframes conv-status-complete {
   0%, 100% {
-    opacity: 1;
-    box-shadow: 0 0 0 2px var(--primary-color-20, rgba(59, 130, 246, 0.2));
+    transform: scale(1);
+    box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.16);
   }
+
   50% {
-    opacity: 0.7;
-    box-shadow: 0 0 0 6px var(--primary-color-40, rgba(59, 130, 246, 0.4));
+    transform: scale(1.06);
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2);
+  }
+}
+
+@keyframes conv-status-complete-ring {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(0.96);
+  }
+
+  50% {
+    opacity: 0.16;
+    transform: scale(1.18);
   }
 }
 
@@ -6731,6 +7204,66 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
     border-bottom-color: var(--border-color, #374151);
   }
 
+  .project-toolbar-title {
+    color: #9ca3af;
+  }
+
+  .project-search-input-wrap {
+    background: rgba(17, 24, 39, 0.86);
+    border-color: rgba(75, 85, 99, 0.7);
+    color: #9ca3af;
+  }
+
+  .project-search-input {
+    color: #f3f4f6;
+  }
+
+  .action-button {
+    color: #d1d5db;
+    background: transparent;
+  }
+
+  .action-button:hover {
+    color: #f3f4f6;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .project-sort-btn {
+    color: #9ca3af;
+  }
+
+  .project-sort-btn:hover {
+    color: #f3f4f6;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .project-sort-menu {
+    background: rgba(17, 24, 39, 0.96);
+    border-color: rgba(75, 85, 99, 0.55);
+    box-shadow: 0 20px 40px rgba(2, 6, 23, 0.34);
+  }
+
+  .project-sort-menu-title {
+    color: #9ca3af;
+  }
+
+  .project-sort-option {
+    color: #f3f4f6;
+  }
+
+  .project-sort-option:hover,
+  .project-sort-option.active {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .project-sort-option-icon {
+    color: #9ca3af;
+  }
+
+  .project-sort-option-check {
+    color: #f3f4f6;
+  }
+
   .section-title {
     color: var(--text-primary, #f9fafb);
   }
@@ -6774,6 +7307,29 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
   .conversation-item.status-disconnected {
     /* 初始化状态不显示黄色背景 */
     background-color: transparent;
+  }
+
+  .conv-status-dot.connected {
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.18);
+  }
+
+  .conv-status-dot.connecting {
+    background-color: #64748b;
+    box-shadow: 0 0 0 2px rgba(100, 116, 139, 0.22);
+  }
+
+  .conv-status-dot.streaming {
+    border-color: rgba(96, 165, 250, 0.22);
+    border-top-color: #60a5fa;
+  }
+
+  .conv-status-dot.completed {
+    background-color: #4ade80;
+    box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.16);
+  }
+
+  .conv-status-dot.completed::after {
+    border-color: rgba(74, 222, 128, 0.22);
   }
 
   .right-panel {

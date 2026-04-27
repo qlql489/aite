@@ -2339,7 +2339,7 @@ onBeforeUnmount(() => {
 /* MCP 服务列表 */
 .mcp-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
 }
 
@@ -4501,6 +4501,10 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 960px) {
+  .mcp-list {
+    grid-template-columns: 1fr;
+  }
+
   .command-main,
   .skill-main,
   .skill-editor-layout {

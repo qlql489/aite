@@ -309,6 +309,77 @@ export interface ToolUseItem {
   requestId?: string;
 }
 
+export type SubagentRuntimeStatus = 'running' | 'completed' | 'error';
+
+export interface SubagentRuntimeCall {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+  inputJson?: string;
+  result?: string;
+  status: SubagentRuntimeStatus;
+  isError?: boolean;
+  startedAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
+export interface SubagentRuntimeState {
+  taskToolUseId: string;
+  description: string;
+  agentType: string;
+  status: SubagentRuntimeStatus;
+  startedAt: number;
+  completedAt?: number;
+  latestPreview?: string;
+  toolCallCount: number;
+  calls: SubagentRuntimeCall[];
+}
+
+export interface TaskRuntimeSummary {
+  status: SubagentRuntimeStatus;
+  elapsedMs?: number;
+  toolCallCount: number;
+  latestPreview?: string;
+}
+
+export interface SubagentToolUseEventPayload {
+  sessionId: string;
+  parentToolUseId: string;
+  toolUseId: string;
+  toolName?: string;
+  input?: Record<string, unknown>;
+  elapsedTimeSeconds?: number;
+}
+
+export interface SubagentToolInputDeltaEventPayload {
+  sessionId: string;
+  parentToolUseId: string;
+  toolUseId: string;
+  delta: string;
+}
+
+export interface SubagentToolResultStartEventPayload {
+  sessionId: string;
+  parentToolUseId: string;
+  toolUseId: string;
+  content: string;
+  isError?: boolean;
+}
+
+export interface SubagentToolResultDeltaEventPayload {
+  sessionId: string;
+  parentToolUseId: string;
+  toolUseId: string;
+  delta: string;
+}
+
+export interface SubagentToolResultCompleteEventPayload {
+  sessionId: string;
+  parentToolUseId: string;
+  toolUseId: string;
+}
+
 /**
  * 消息接口
  * 注意：后端推送的消息格式支持以下字段：
@@ -478,6 +549,8 @@ export interface ToolMessageGroup {
   }>;
   firstId: string;
   timestamp?: number;
+  taskRuntimeSummary?: TaskRuntimeSummary;
+  subagentGroups?: SubagentGroup[];
 }
 
 /**
@@ -489,6 +562,12 @@ export interface SubagentGroup {
   description: string;
   agentType: string;
   children: FeedEntry[];
+  liveCalls?: SubagentRuntimeCall[];
+  status?: SubagentRuntimeStatus;
+  startedAt?: number;
+  completedAt?: number;
+  latestPreview?: string;
+  toolCallCount?: number;
 }
 
 /**

@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onUnmounted, computed } from 'vue';
-import type { Message, PermissionRequest } from '../../types';
+import type { FeedEntry, Message, PermissionRequest, SubagentRuntimeState } from '../../types';
 import MessageItem from './MessageItem.vue';
 import MessageGroup from './MessageGroup.vue';
 import SubagentView from './SubagentView.vue';
 import { groupMessages } from '../../utils/messageGrouping';
 import { isTodoWriteToolUseBlock } from '../../utils/todoWrite';
-import type { FeedEntry } from '../../types';
 import type { RewindAction, RewindTurn } from '../../utils/rewind';
 import { messageMatchesQuery } from '../../utils/sessionSearch';
 
@@ -19,6 +18,7 @@ interface Props {
   rewindBusy?: boolean;
   searchQuery?: string;
   activeSearchResultIndex?: number;
+  subagentRuntime?: Map<string, SubagentRuntimeState>;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -29,6 +29,7 @@ const props = withDefaults(defineProps<Props>(), {
   rewindBusy: false,
   searchQuery: '',
   activeSearchResultIndex: 0,
+  subagentRuntime: () => new Map(),
 });
 
 // 调试：立即输出 props 的值
@@ -87,7 +88,7 @@ const consumePendingInstantScroll = () => {
 
 // 分组后的消息条目
 const feedEntries = computed<FeedEntry[]>(() => {
-  return groupMessages(props.messages);
+  return groupMessages(props.messages, props.subagentRuntime);
 });
 
 const rewindTurnMap = computed(() => {
@@ -115,6 +116,44 @@ const activeSearchMessageId = computed(() => {
 });
 
 type GroupCornerStyle = 'none' | 'top' | 'bottom' | 'all';
+const parentToolExpanded = ref<Record<string, boolean>>({});
+
+function getParentToolUseId(message: Message): string | null {
+  return message.parentToolUseId || message.parent_tool_use_id || null;
+}
+
+function summarizeFeedEntry(entry: FeedEntry): Record<string, unknown> {
+  if (entry.kind === 'message') {
+    return {
+      kind: entry.kind,
+      id: entry.msg.id,
+      role: entry.msg.role,
+      parentToolUseId: getParentToolUseId(entry.msg),
+      toolNames: (entry.msg.contentBlocks || [])
+        .filter((block) => block.type === 'tool_use')
+        .map((block) => (block as { name?: string }).name || ''),
+    };
+  }
+
+  if (entry.kind === 'tool_msg_group') {
+    return {
+      kind: entry.kind,
+      toolName: entry.toolName,
+      firstId: entry.firstId,
+      itemIds: entry.items.map((item) => item.id),
+      subagentGroups: entry.subagentGroups?.map((group) => summarizeFeedEntry(group)) || [],
+    };
+  }
+
+  return {
+    kind: entry.kind,
+    taskToolUseId: entry.taskToolUseId,
+    description: entry.description,
+    agentType: entry.agentType,
+    liveCalls: entry.liveCalls?.map((call) => ({ id: call.id, name: call.name, status: call.status })) || [],
+    children: entry.children.map((child) => summarizeFeedEntry(child)),
+  };
+}
 
 function getVisibleTextContent(msg: Message): string {
   if (!msg.content) return '';
@@ -131,6 +170,24 @@ function getVisibleTextContent(msg: Message): string {
   } catch {
     return msg.content.trim();
   }
+}
+
+function isParentToolExpanded(entryId: string, defaultValue = false): boolean {
+  if (!(entryId in parentToolExpanded.value)) {
+    parentToolExpanded.value = {
+      ...parentToolExpanded.value,
+      [entryId]: defaultValue,
+    };
+  }
+
+  return parentToolExpanded.value[entryId];
+}
+
+function setParentToolExpanded(entryId: string, expanded: boolean): void {
+  parentToolExpanded.value = {
+    ...parentToolExpanded.value,
+    [entryId]: expanded,
+  };
 }
 
 function hasVisibleBlockContent(msg: Message): boolean {
@@ -215,49 +272,69 @@ function getAssistantBlockCornerStyle(index: number): GroupCornerStyle {
   return getToolGroupCornerStyle(index);
 }
 
-// 为每个 entry 计算对应的权限请求（响应式）
-const entryPermissions = computed(() => {
-  const permMap = new Map<string, PermissionRequest>();
+function permissionMatchesToolUseId(permission: PermissionRequest, toolUseId: string): boolean {
+  return permission.tool_use_id === toolUseId || permission.params?.tool_use_id === toolUseId;
+}
 
-  for (const entry of feedEntries.value) {
-    if (entry.kind !== 'tool_msg_group') continue;
+function collectEntryPermissions(
+  entries: FeedEntry[],
+  permissions: PermissionRequest[],
+  permMap: Map<string, PermissionRequest>,
+  matchedRequestIds: Set<string>,
+): void {
+  for (const entry of entries) {
+    if (entry.kind === 'tool_msg_group') {
+      let hasMatch = false;
 
-    // 从工具组的 items 中获取 tool_use_id 并匹配
-    let hasMatch = false;
-    for (const item of entry.items) {
-      const perm = props.pendingPermissions?.find(p =>
-        p.tool_use_id === item.id || p.params?.tool_use_id === item.id
-      );
-      if (perm) {
-        // 使用 item.id (tool_use_id) 作为键，而不是 entry.firstId (消息ID)
+      for (const item of entry.items) {
+        const perm = permissions.find((candidate) => permissionMatchesToolUseId(candidate, item.id));
+        if (!perm) continue;
+
         permMap.set(item.id, perm);
+        matchedRequestIds.add(perm.request_id);
+        hasMatch = true;
+
         console.log('✅ [MessageList] Matched permission:', {
           entryFirstId: entry.firstId,
           itemId: item.id,
           permRequestId: perm.request_id,
           permToolUseId: perm.tool_use_id,
-          permParamsToolUseId: perm.params?.tool_use_id
+          permParamsToolUseId: perm.params?.tool_use_id,
         });
-        hasMatch = true;
-        break; // 找到一个匹配后就可以跳出，因为一个工具组只需要一个权限
+        break;
       }
+
+      if (!hasMatch && permissions.length) {
+        console.log('⚠️ [MessageList] No permission match for entry:', {
+          entryFirstId: entry.firstId,
+          itemCount: entry.items.length,
+          itemIds: entry.items.map((item) => item.id),
+          pendingPermissions: permissions.map((perm) => ({
+            requestId: perm.request_id,
+            toolUseId: perm.tool_use_id,
+            paramsToolUseId: perm.params?.tool_use_id,
+          })),
+        });
+      }
+
+      for (const subagent of entry.subagentGroups || []) {
+        collectEntryPermissions(subagent.children, permissions, permMap, matchedRequestIds);
+      }
+      continue;
     }
 
-    // 如果没有找到匹配的权限，记录调试信息
-    if (!hasMatch && props.pendingPermissions?.length) {
-      console.log('⚠️ [MessageList] No permission match for entry:', {
-        entryFirstId: entry.firstId,
-        itemCount: entry.items.length,
-        itemIds: entry.items.map(i => i.id),
-        pendingPermissions: props.pendingPermissions.map(p => ({
-          requestId: p.request_id,
-          toolUseId: p.tool_use_id,
-          paramsToolUseId: p.params?.tool_use_id
-        }))
-      });
+    if (entry.kind === 'subagent') {
+      collectEntryPermissions(entry.children, permissions, permMap, matchedRequestIds);
     }
   }
+}
 
+// 为每个 entry 计算对应的权限请求（响应式）
+const entryPermissions = computed(() => {
+  const permMap = new Map<string, PermissionRequest>();
+  const permissions = props.pendingPermissions || [];
+  const matchedRequestIds = new Set<string>();
+  collectEntryPermissions(feedEntries.value, permissions, permMap, matchedRequestIds);
   return permMap;
 });
 
@@ -270,6 +347,39 @@ function getPermissionForGroup(entry: FeedEntry): PermissionRequest | undefined 
     if (perm) return perm;
   }
   return undefined;
+}
+
+function subagentGroupHasPendingPermission(group: Extract<FeedEntry, { kind: 'subagent' }>): boolean {
+  return group.children.some((entry) => entryHasPendingPermission(entry));
+}
+
+function entryHasPendingPermission(entry: FeedEntry): boolean {
+  if (entry.kind === 'tool_msg_group') {
+    if (getPermissionForGroup(entry)) return true;
+    return (entry.subagentGroups || []).some((group) => subagentGroupHasPendingPermission(group));
+  }
+
+  if (entry.kind === 'subagent') {
+    return subagentGroupHasPendingPermission(entry);
+  }
+
+  return false;
+}
+
+function getSubagentParentDescription(entry: FeedEntry): string {
+  if (entry.kind !== 'tool_msg_group') return '';
+
+  const input = entry.items[0]?.input || {};
+  const description = String(input.description || '').trim();
+  const name = String(input.name || '').trim();
+  const prompt = String(input.prompt || '').trim();
+  const parts: string[] = [];
+
+  if (description) parts.push(description);
+  if (name) parts.push(`name: ${name}`);
+  if (prompt) parts.push(`prompt: ${prompt}`);
+
+  return parts.join(' · ');
 }
 
 // 获取条目的唯一 key
@@ -356,6 +466,64 @@ watch(() => feedEntries.value, async () => {
   }
 }, { deep: true });
 
+watch(
+  () => feedEntries.value,
+  (entries) => {
+    const nextExpanded = { ...parentToolExpanded.value };
+    let hasChange = false;
+
+    for (const entry of entries) {
+      if (entry.kind !== 'tool_msg_group') continue;
+      if (!entryHasPendingPermission(entry)) continue;
+      if (nextExpanded[entry.firstId] === true) continue;
+
+      nextExpanded[entry.firstId] = true;
+      hasChange = true;
+    }
+
+    if (hasChange) {
+      parentToolExpanded.value = nextExpanded;
+    }
+  },
+  { deep: true, immediate: true },
+);
+
+watch(
+  () => ({
+    messageIds: props.messages.map((message) => message.id).join(','),
+    runtimeKeys: Array.from(props.subagentRuntime.keys()).join(','),
+    feedSummary: feedEntries.value.map((entry) => JSON.stringify(summarizeFeedEntry(entry))).join('||'),
+  }),
+  () => {
+    if (!import.meta.env.DEV) return;
+
+    const hasSubagentSignal = props.messages.some((message) => {
+      if (getParentToolUseId(message)) return true;
+      return (message.contentBlocks || []).some((block) => block.type === 'tool_use' && (block as { name?: string }).name === 'Task');
+    }) || props.subagentRuntime.size > 0;
+
+    if (!hasSubagentSignal) return;
+
+    console.groupCollapsed('[SubagentDebug] MessageList feed structure');
+    console.log('messages', props.messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      parentToolUseId: getParentToolUseId(message),
+      toolNames: (message.contentBlocks || [])
+        .filter((block) => block.type === 'tool_use')
+        .map((block) => (block as { name?: string }).name || ''),
+    })));
+    console.log('runtime', Array.from(props.subagentRuntime.entries()).map(([taskId, runtime]) => ({
+      taskId,
+      status: runtime.status,
+      callIds: runtime.calls.map((call) => call.id),
+    })));
+    console.log('feedEntries', feedEntries.value.map((entry) => summarizeFeedEntry(entry)));
+    console.groupEnd();
+  },
+  { deep: true, immediate: true },
+);
+
 // 监听流式状态
 watch(() => props.isStreaming, async (isStreaming) => {
   if (isStreaming) {
@@ -425,22 +593,9 @@ const lastAssistantMessageId = computed(() => {
 
 // 获取没有匹配到工具组的权限请求（用于后备显示）
 const unmatchedPermissions = computed(() => {
-  // 获取所有已匹配的 request_id
   const matchedRequestIds = new Set<string>();
-  for (const entry of feedEntries.value) {
-    if (entry.kind === 'tool_msg_group') {
-      for (const item of entry.items) {
-        const perm = props.pendingPermissions.find(p =>
-          p.tool_use_id === item.id || p.params?.tool_use_id === item.id
-        );
-        if (perm) {
-          matchedRequestIds.add(perm.request_id);
-        }
-      }
-    }
-  }
-  // 返回未匹配的权限请求
-  return props.pendingPermissions.filter(p => !matchedRequestIds.has(p.request_id));
+  collectEntryPermissions(feedEntries.value, props.pendingPermissions || [], new Map(), matchedRequestIds);
+  return props.pendingPermissions.filter((permission) => !matchedRequestIds.has(permission.request_id));
 });
 </script>
 
@@ -460,20 +615,54 @@ const unmatchedPermissions = computed(() => {
       <!-- 分组后的消息列表 -->
       <template v-for="(entry, index) in feedEntries" :key="getEntryKey(entry, index)">
         <!-- 工具消息组 -->
-        <MessageGroup
+        <div
           v-if="entry.kind === 'tool_msg_group'"
-          :group="entry"
-          :corner-style="getToolGroupCornerStyle(index)"
-          :permission="getPermissionForGroup(entry)"
-          @approve="(id: string, updatedInput?: Record<string, unknown>) => emit('approve', id, updatedInput)"
-          @approve-always="(id: string) => emit('approveAlways', id)"
-          @reject="(id: string, reason?: string) => emit('reject', id, reason)"
-        />
+          class="tool-entry-stack"
+          :class="{ 'has-subagents': !!entry.subagentGroups?.length }"
+        >
+          <MessageGroup
+            :group="entry"
+            :corner-style="getToolGroupCornerStyle(index)"
+            :permission="getPermissionForGroup(entry)"
+            :initial-expanded="isParentToolExpanded(entry.firstId, !!entry.subagentGroups?.length)"
+            @approve="(id: string, updatedInput?: Record<string, unknown>) => emit('approve', id, updatedInput)"
+            @approve-always="(id: string) => emit('approveAlways', id)"
+            @reject="(id: string, reason?: string) => emit('reject', id, reason)"
+            @expanded-change="(expanded: boolean) => setParentToolExpanded(entry.firstId, expanded)"
+          >
+            <template #before-result>
+              <div
+                v-if="entry.subagentGroups?.length"
+                class="nested-subagent-stack"
+              >
+                <div
+                  v-for="subagent in entry.subagentGroups"
+                  :key="subagent.taskToolUseId"
+                  class="nested-subagent-item"
+                >
+                  <SubagentView
+                    :group="subagent"
+                    :depth="1"
+                    :permissions="entryPermissions"
+                    :parent-description="getSubagentParentDescription(entry)"
+                    @approve="(id: string, updatedInput?: Record<string, unknown>) => emit('approve', id, updatedInput)"
+                    @approve-always="(id: string) => emit('approveAlways', id)"
+                    @reject="(id: string, reason?: string) => emit('reject', id, reason)"
+                  />
+                </div>
+              </div>
+            </template>
+          </MessageGroup>
+        </div>
 
         <!-- 子代理 -->
         <SubagentView
           v-else-if="entry.kind === 'subagent'"
           :group="entry"
+          :permissions="entryPermissions"
+          @approve="(id: string, updatedInput?: Record<string, unknown>) => emit('approve', id, updatedInput)"
+          @approve-always="(id: string) => emit('approveAlways', id)"
+          @reject="(id: string, reason?: string) => emit('reject', id, reason)"
         />
 
         <!-- 普通消息 -->
@@ -553,6 +742,60 @@ const unmatchedPermissions = computed(() => {
   margin-right: auto;
 }
 
+.tool-entry-stack {
+  max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.nested-subagent-stack {
+  position: relative;
+  margin-top: 0.35rem;
+  margin-left: 1.35rem;
+  padding-left: 1rem;
+}
+
+.nested-subagent-stack::before {
+  content: '';
+  position: absolute;
+  left: 0.22rem;
+  top: 0;
+  bottom: 0.9rem;
+  width: 1px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.nested-subagent-item {
+  position: relative;
+}
+
+.nested-subagent-item + .nested-subagent-item {
+  margin-top: 0.65rem;
+}
+
+.nested-subagent-item::before {
+  content: '';
+  position: absolute;
+  left: -0.78rem;
+  top: 1rem;
+  width: 0.8rem;
+  height: 1px;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.nested-subagent-item::after {
+  content: '';
+  position: absolute;
+  left: -1rem;
+  top: 0.76rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  border: 2px solid rgba(148, 163, 184, 0.75);
+  background: var(--bg-primary, #ffffff);
+  box-sizing: border-box;
+}
+
 /* 空状态 */
 .empty-state {
   display: flex;
@@ -625,6 +868,16 @@ const unmatchedPermissions = computed(() => {
 
 /* 深色模式 */
 @media (prefers-color-scheme: dark) {
+  .nested-subagent-stack::before,
+  .nested-subagent-item::before {
+    background: rgba(107, 114, 128, 0.65);
+  }
+
+  .nested-subagent-item::after {
+    border-color: rgba(107, 114, 128, 0.85);
+    background: var(--bg-secondary, #1f2937);
+  }
+
   .empty-title {
     color: var(--text-primary, #f9fafb);
   }

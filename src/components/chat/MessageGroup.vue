@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, withDefaults } from 'vue';
+import { ref, computed, withDefaults, watch } from 'vue';
 import type { ToolMessageGroup, PermissionRequest } from '../../types';
 import { getToolLabel } from '../../utils/messageGrouping';
 import ToolCallBlock from './ToolCallBlock.vue';
@@ -10,10 +10,14 @@ interface Props {
   group: ToolMessageGroup;
   cornerStyle?: 'none' | 'top' | 'bottom' | 'all';
   permission?: PermissionRequest;  // 关联的权限请求
+  embedded?: boolean;
+  initialExpanded?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   cornerStyle: 'all',
+  embedded: false,
+  initialExpanded: false,
 });
 const statsStore = useStatsStore();
 
@@ -21,11 +25,12 @@ interface Emits {
   (e: 'approve', requestId: string, updatedInput?: Record<string, unknown>): void;
   (e: 'approveAlways', requestId: string): void;
   (e: 'reject', requestId: string, reason?: string): void;
+  (e: 'expandedChange', expanded: boolean): void;
 }
 
 const emit = defineEmits<Emits>();
 
-const isOpen = ref(false);
+const isOpen = ref(props.initialExpanded);
 
 // 计算整体状态（基于所有项）
 const overallStatus = computed(() => {
@@ -46,10 +51,19 @@ const currentCwd = computed(() => statsStore.selectedProjectPath || '');
 const count = computed(() => props.group.items.length);
 
 // 自动展开逻辑已禁用
+watch(() => props.initialExpanded, (value: boolean) => {
+  isOpen.value = value;
+});
+
+function toggleOpen() {
+  const next = !isOpen.value;
+  isOpen.value = next;
+  emit('expandedChange', next);
+}
 </script>
 
 <template>
-  <div class="message-group" :class="[`corner-${cornerStyle}`]">
+  <div class="message-group" :class="[`corner-${cornerStyle}`, { embedded }]">
     <!-- 单个工具调用直接使用 ToolCallBlock -->
     <ToolCallBlock
       v-if="count === 1"
@@ -61,15 +75,23 @@ const count = computed(() => props.group.items.length);
       :cwd="currentCwd"
       :corner-style="cornerStyle"
       :permission="permission"
+      :task-runtime-summary="group.taskRuntimeSummary"
+      :embedded="embedded"
+      :initial-expanded="initialExpanded"
       @approve="(id: string, updatedInput?: Record<string, unknown>) => emit('approve', id, updatedInput)"
       @approve-always="(id: string) => emit('approveAlways', id)"
       @reject="(id: string, reason?: string) => emit('reject', id, reason)"
-    />
+      @expanded-change="(expanded: boolean) => emit('expandedChange', expanded)"
+    >
+      <template #before-result>
+        <slot name="before-result" />
+      </template>
+    </ToolCallBlock>
 
     <!-- 多个工具调用使用分组显示 -->
     <template v-else>
       <!-- 头部 -->
-      <div class="tool-header" @click="isOpen = !isOpen">
+      <div class="tool-header" :class="{ embedded }" @click="toggleOpen">
         <span class="tool-icon">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="7"/>
@@ -105,7 +127,9 @@ const count = computed(() => props.group.items.length);
       </div>
 
       <!-- 展开内容：执行结果 -->
-      <div v-if="isOpen" class="tool-results">
+      <div v-if="isOpen" class="tool-results" :class="{ embedded }">
+        <slot name="before-result" />
+
         <div
           v-for="(item, index) in group.items"
           :key="item.id || index"
@@ -128,6 +152,10 @@ const count = computed(() => props.group.items.length);
 <style scoped>
 .message-group {
   margin: 0;
+}
+
+.message-group.embedded {
+  min-width: 0;
 }
 
 .message-group.corner-none,
@@ -154,6 +182,17 @@ const count = computed(() => props.group.items.length);
 
 .tool-header:hover {
   background-color: rgba(148, 163, 184, 0.08);
+}
+
+.tool-header.embedded {
+  padding: 0.2rem 0.15rem 0.2rem 0.35rem;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.tool-header.embedded:hover {
+  background-color: rgba(148, 163, 184, 0.05);
 }
 
 .tool-icon {
@@ -218,6 +257,11 @@ const count = computed(() => props.group.items.length);
   margin-top: 0.2rem;
 }
 
+.tool-results.embedded {
+  margin-top: 0;
+  padding-left: 1.65rem;
+}
+
 .tool-result-item {
   position: relative;
   border: 1px solid var(--border-color, #e5e7eb);
@@ -225,6 +269,10 @@ const count = computed(() => props.group.items.length);
   overflow: hidden;
   background: var(--bg-secondary, #f9fafb);
   margin-bottom: 0;
+}
+
+.tool-results.embedded .tool-result-item {
+  border-radius: 10px;
 }
 
 .tool-result-item:last-child {
@@ -255,8 +303,17 @@ const count = computed(() => props.group.items.length);
     border-color: var(--border-color, #374151);
   }
 
+  .tool-header.embedded {
+    background: transparent;
+    border-color: transparent;
+  }
+
   .tool-header:hover {
     background-color: rgba(75, 85, 99, 0.16);
+  }
+
+  .tool-header.embedded:hover {
+    background-color: rgba(75, 85, 99, 0.08);
   }
 
   .tool-icon {

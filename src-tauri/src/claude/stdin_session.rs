@@ -11,6 +11,9 @@ use crate::claude::transports::stdin_transport::StdinTransport;
 use crate::models::{
     ContentBlock as ModelContentBlock, Message, MessageContent, MessageRole, Session, TokenUsage,
 };
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
@@ -24,6 +27,77 @@ pub type StreamDataCallback = Box<dyn Fn(String) + Send + Sync>;
 pub type StreamCompleteCallback = Box<dyn Fn(Message) + Send + Sync>;
 /// Callback type for streaming messages (new - supports multiple message types)
 pub type StreamMessageCallback = Box<dyn Fn(Message) + Send + Sync>;
+
+const EVENT_SUBAGENT_TOOL_USE: &str = "claude:subagent_tool_use";
+const EVENT_SUBAGENT_TOOL_INPUT_DELTA: &str = "claude:subagent_tool_input_delta";
+const EVENT_SUBAGENT_TOOL_RESULT_START: &str = "claude:subagent_tool_result_start";
+const EVENT_SUBAGENT_TOOL_RESULT_DELTA: &str = "claude:subagent_tool_result_delta";
+const EVENT_SUBAGENT_TOOL_RESULT_COMPLETE: &str = "claude:subagent_tool_result_complete";
+
+#[derive(Debug, Clone, Default)]
+struct SubagentStreamState {
+    tool_use_ids_by_index: HashMap<(String, u64), String>,
+    tool_result_ids_by_index: HashMap<(String, u64), String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubagentToolUsePayload {
+    session_id: String,
+    parent_tool_use_id: String,
+    tool_use_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elapsed_time_seconds: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubagentToolInputDeltaPayload {
+    session_id: String,
+    parent_tool_use_id: String,
+    tool_use_id: String,
+    delta: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubagentToolResultStartPayload {
+    session_id: String,
+    parent_tool_use_id: String,
+    tool_use_id: String,
+    content: String,
+    is_error: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubagentToolResultDeltaPayload {
+    session_id: String,
+    parent_tool_use_id: String,
+    tool_use_id: String,
+    delta: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SubagentToolResultCompletePayload {
+    session_id: String,
+    parent_tool_use_id: String,
+    tool_use_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum FrontendSubagentEvent {
+    ToolUse(SubagentToolUsePayload),
+    ToolInputDelta(SubagentToolInputDeltaPayload),
+    ToolResultStart(SubagentToolResultStartPayload),
+    ToolResultDelta(SubagentToolResultDeltaPayload),
+    ToolResultComplete(SubagentToolResultCompletePayload),
+}
 
 /// Pending permission request waiting for user decision
 pub struct PendingPermissionRequest {
@@ -158,6 +232,7 @@ impl StdinSessionManager {
         let manager = self.clone();
         let handle = tokio::spawn(async move {
             info!("📥 Background message handler started");
+            let mut subagent_stream_state = SubagentStreamState::default();
 
             loop {
                 match manager.transport.recv_message().await {
@@ -392,6 +467,29 @@ impl StdinSessionManager {
                                 // Stream events are pushed via claude:stream_data event
                                 // Use the session_id from the message itself, not from manager state
                                 if let Some(app) = manager.get_app_handle().await {
+                                    for frontend_event in Self::translate_subagent_stream_event(
+                                        se,
+                                        &mut subagent_stream_state,
+                                    ) {
+                                        match frontend_event {
+                                            FrontendSubagentEvent::ToolUse(payload) => {
+                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_USE, payload);
+                                            }
+                                            FrontendSubagentEvent::ToolInputDelta(payload) => {
+                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_INPUT_DELTA, payload);
+                                            }
+                                            FrontendSubagentEvent::ToolResultStart(payload) => {
+                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_RESULT_START, payload);
+                                            }
+                                            FrontendSubagentEvent::ToolResultDelta(payload) => {
+                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_RESULT_DELTA, payload);
+                                            }
+                                            FrontendSubagentEvent::ToolResultComplete(payload) => {
+                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_RESULT_COMPLETE, payload);
+                                            }
+                                        }
+                                    }
+
                                     if let Some(text_delta) = Self::extract_text_delta(&se.event) {
                                         // Use message's own session_id to ensure correct routing
                                         let payload = serde_json::json!({
@@ -409,6 +507,16 @@ impl StdinSessionManager {
                                             "usage": usage,
                                         });
                                         let _ = app.emit("claude:stream_usage", payload);
+                                    }
+                                }
+                            }
+
+                            SdkMessage::ToolProgress(progress) => {
+                                if let Some(app) = manager.get_app_handle().await {
+                                    if let Some(payload) =
+                                        Self::translate_subagent_tool_progress(progress)
+                                    {
+                                        let _ = app.emit(EVENT_SUBAGENT_TOOL_USE, payload);
                                     }
                                 }
                             }
@@ -1171,6 +1279,257 @@ impl StdinSessionManager {
         None
     }
 
+    fn translate_subagent_tool_progress(
+        progress: &ToolProgressMessage,
+    ) -> Option<SubagentToolUsePayload> {
+        Some(SubagentToolUsePayload {
+            session_id: progress.session_id.clone(),
+            parent_tool_use_id: progress.parent_tool_use_id.clone()?,
+            tool_use_id: progress.tool_use_id.clone(),
+            tool_name: Some(progress.tool_name.clone()),
+            input: None,
+            elapsed_time_seconds: Some(progress.elapsed_time_seconds),
+        })
+    }
+
+    fn translate_subagent_stream_event(
+        stream_event: &StreamEventMessage,
+        state: &mut SubagentStreamState,
+    ) -> Vec<FrontendSubagentEvent> {
+        let Some(parent_tool_use_id) = stream_event.parent_tool_use_id.clone() else {
+            return Vec::new();
+        };
+
+        let event_type = stream_event
+            .event
+            .get("type")
+            .and_then(|value| value.as_str());
+        let index = stream_event
+            .event
+            .get("index")
+            .and_then(|value| value.as_u64());
+
+        match event_type {
+            Some("content_block_start") => {
+                Self::translate_subagent_content_block_start(
+                    &stream_event.session_id,
+                    &parent_tool_use_id,
+                    index,
+                    stream_event.event.get("content_block"),
+                    state,
+                )
+            }
+            Some("content_block_delta") => Self::translate_subagent_content_block_delta(
+                &stream_event.session_id,
+                &parent_tool_use_id,
+                index,
+                stream_event.event.get("delta"),
+                state,
+            ),
+            Some("content_block_stop") => Self::translate_subagent_content_block_stop(
+                &stream_event.session_id,
+                &parent_tool_use_id,
+                index,
+                state,
+            ),
+            _ => Vec::new(),
+        }
+    }
+
+    fn translate_subagent_content_block_start(
+        session_id: &str,
+        parent_tool_use_id: &str,
+        index: Option<u64>,
+        content_block: Option<&Value>,
+        state: &mut SubagentStreamState,
+    ) -> Vec<FrontendSubagentEvent> {
+        let Some(index) = index else {
+            return Vec::new();
+        };
+        let Some(content_block) = content_block else {
+            return Vec::new();
+        };
+        let Some(block_type) = content_block.get("type").and_then(|value| value.as_str()) else {
+            return Vec::new();
+        };
+
+        match block_type {
+            "tool_use" => {
+                let Some(tool_use_id) = content_block
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string()) else {
+                    return Vec::new();
+                };
+                let tool_name = content_block
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string());
+                let input = content_block.get("input").cloned();
+
+                state.tool_use_ids_by_index.insert(
+                    (session_id.to_string(), index),
+                    tool_use_id.clone(),
+                );
+
+                vec![FrontendSubagentEvent::ToolUse(SubagentToolUsePayload {
+                    session_id: session_id.to_string(),
+                    parent_tool_use_id: parent_tool_use_id.to_string(),
+                    tool_use_id,
+                    tool_name,
+                    input,
+                    elapsed_time_seconds: None,
+                })]
+            }
+            block_type if Self::is_tool_result_block_type(block_type) => {
+                let Some(tool_use_id) = content_block
+                    .get("tool_use_id")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string()) else {
+                    return Vec::new();
+                };
+                state.tool_result_ids_by_index.insert(
+                    (session_id.to_string(), index),
+                    tool_use_id.clone(),
+                );
+
+                let content = Self::tool_result_content_to_string(content_block.get("content"));
+                if content.is_empty() {
+                    return Vec::new();
+                }
+
+                let is_error = content_block
+                    .get("is_error")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+
+                vec![FrontendSubagentEvent::ToolResultStart(
+                    SubagentToolResultStartPayload {
+                        session_id: session_id.to_string(),
+                        parent_tool_use_id: parent_tool_use_id.to_string(),
+                        tool_use_id,
+                        content,
+                        is_error,
+                    },
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn translate_subagent_content_block_delta(
+        session_id: &str,
+        parent_tool_use_id: &str,
+        index: Option<u64>,
+        delta: Option<&Value>,
+        state: &mut SubagentStreamState,
+    ) -> Vec<FrontendSubagentEvent> {
+        let Some(index) = index else {
+            return Vec::new();
+        };
+        let Some(delta) = delta else {
+            return Vec::new();
+        };
+        let Some(delta_type) = delta.get("type").and_then(|value| value.as_str()) else {
+            return Vec::new();
+        };
+
+        match delta_type {
+            "input_json_delta" => {
+                let Some(tool_use_id) = state
+                    .tool_use_ids_by_index
+                    .get(&(session_id.to_string(), index))
+                    .cloned() else {
+                    return Vec::new();
+                };
+                let Some(partial_json) = delta
+                    .get("partial_json")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string()) else {
+                    return Vec::new();
+                };
+
+                vec![FrontendSubagentEvent::ToolInputDelta(
+                    SubagentToolInputDeltaPayload {
+                        session_id: session_id.to_string(),
+                        parent_tool_use_id: parent_tool_use_id.to_string(),
+                        tool_use_id,
+                        delta: partial_json,
+                    },
+                )]
+            }
+            "text_delta" => {
+                let Some(tool_use_id) = state
+                    .tool_result_ids_by_index
+                    .get(&(session_id.to_string(), index))
+                    .cloned() else {
+                    return Vec::new();
+                };
+                let Some(text) = delta
+                    .get("text")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string()) else {
+                    return Vec::new();
+                };
+
+                vec![FrontendSubagentEvent::ToolResultDelta(
+                    SubagentToolResultDeltaPayload {
+                        session_id: session_id.to_string(),
+                        parent_tool_use_id: parent_tool_use_id.to_string(),
+                        tool_use_id,
+                        delta: text,
+                    },
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn translate_subagent_content_block_stop(
+        session_id: &str,
+        parent_tool_use_id: &str,
+        index: Option<u64>,
+        state: &mut SubagentStreamState,
+    ) -> Vec<FrontendSubagentEvent> {
+        let Some(index) = index else {
+            return Vec::new();
+        };
+
+        let key = (session_id.to_string(), index);
+        if let Some(tool_use_id) = state.tool_result_ids_by_index.remove(&key) {
+            return vec![FrontendSubagentEvent::ToolResultComplete(
+                SubagentToolResultCompletePayload {
+                    session_id: session_id.to_string(),
+                    parent_tool_use_id: parent_tool_use_id.to_string(),
+                    tool_use_id,
+                },
+            )];
+        }
+
+        Vec::new()
+    }
+
+    fn is_tool_result_block_type(block_type: &str) -> bool {
+        matches!(
+            block_type,
+            "tool_result"
+                | "web_search_tool_result"
+                | "web_fetch_tool_result"
+                | "code_execution_tool_result"
+                | "bash_code_execution_tool_result"
+                | "text_editor_code_execution_tool_result"
+                | "mcp_tool_result"
+        )
+    }
+
+    fn tool_result_content_to_string(content: Option<&Value>) -> String {
+        match content {
+            Some(Value::String(value)) => value.clone(),
+            Some(Value::Null) | None => String::new(),
+            Some(other) => serde_json::to_string(other).unwrap_or_default(),
+        }
+    }
+
     /// Extract usage payload from message_delta stream events.
     fn extract_message_delta_usage(event: &serde_json::Value) -> Option<crate::models::TokenUsage> {
         if event.get("type").and_then(|t| t.as_str()) != Some("message_delta") {
@@ -1271,6 +1630,8 @@ impl StdinSessionManager {
             msg.content = MessageContent::Blocks(blocks);
         }
 
+        msg.parent_tool_use_id = assist.parent_tool_use_id.clone();
+
         // Add model and token usage info
         msg.model = Some(assist.message.model.clone());
         msg.usage = Some(TokenUsage {
@@ -1323,6 +1684,7 @@ impl StdinSessionManager {
                                 MessageContent::Text(content_str.clone()),
                             );
                             msg.content = MessageContent::Blocks(blocks);
+                            msg.parent_tool_use_id = user.parent_tool_use_id.clone();
 
                             info!(
                                 "Created tool_result message with tool_use_id: {:?}",
@@ -1345,6 +1707,7 @@ impl StdinSessionManager {
                                     data: source.data.clone(),
                                 }),
                             }]);
+                            msg.parent_tool_use_id = user.parent_tool_use_id.clone();
                             return Some(msg);
                         }
                         _ => {}
@@ -1394,5 +1757,172 @@ impl StdinSessionManager {
             skills.as_ref().map(|v| v.len()).unwrap_or(0)
         );
         (commands, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn make_stream_event(
+        session_id: &str,
+        parent_tool_use_id: Option<&str>,
+        event: Value,
+    ) -> StreamEventMessage {
+        StreamEventMessage {
+            event,
+            parent_tool_use_id: parent_tool_use_id.map(|value| value.to_string()),
+            uuid: "uuid_1".to_string(),
+            session_id: session_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn translates_subagent_tool_use_event() {
+        let mut state = SubagentStreamState::default();
+        let stream_event = make_stream_event(
+            "session_1",
+            Some("task_1"),
+            json!({
+                "type": "content_block_start",
+                "index": 2,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "Read",
+                    "input": { "file_path": "src/main.ts" }
+                }
+            }),
+        );
+
+        let translated =
+            StdinSessionManager::translate_subagent_stream_event(&stream_event, &mut state);
+
+        assert_eq!(
+            translated,
+            vec![FrontendSubagentEvent::ToolUse(SubagentToolUsePayload {
+                session_id: "session_1".to_string(),
+                parent_tool_use_id: "task_1".to_string(),
+                tool_use_id: "toolu_1".to_string(),
+                tool_name: Some("Read".to_string()),
+                input: Some(json!({ "file_path": "src/main.ts" })),
+                elapsed_time_seconds: None,
+            })]
+        );
+    }
+
+    #[test]
+    fn translates_subagent_tool_result_lifecycle() {
+        let mut state = SubagentStreamState::default();
+        let start_event = make_stream_event(
+            "session_1",
+            Some("task_1"),
+            json!({
+                "type": "content_block_start",
+                "index": 4,
+                "content_block": {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": "partial result",
+                    "is_error": false
+                }
+            }),
+        );
+
+        let start =
+            StdinSessionManager::translate_subagent_stream_event(&start_event, &mut state);
+        assert_eq!(
+            start,
+            vec![FrontendSubagentEvent::ToolResultStart(
+                SubagentToolResultStartPayload {
+                    session_id: "session_1".to_string(),
+                    parent_tool_use_id: "task_1".to_string(),
+                    tool_use_id: "toolu_1".to_string(),
+                    content: "partial result".to_string(),
+                    is_error: false,
+                },
+            )]
+        );
+
+        let delta_event = make_stream_event(
+            "session_1",
+            Some("task_1"),
+            json!({
+                "type": "content_block_delta",
+                "index": 4,
+                "delta": {
+                    "type": "text_delta",
+                    "text": " + more"
+                }
+            }),
+        );
+
+        let delta =
+            StdinSessionManager::translate_subagent_stream_event(&delta_event, &mut state);
+        assert_eq!(
+            delta,
+            vec![FrontendSubagentEvent::ToolResultDelta(
+                SubagentToolResultDeltaPayload {
+                    session_id: "session_1".to_string(),
+                    parent_tool_use_id: "task_1".to_string(),
+                    tool_use_id: "toolu_1".to_string(),
+                    delta: " + more".to_string(),
+                },
+            )]
+        );
+
+        let stop_event = make_stream_event(
+            "session_1",
+            Some("task_1"),
+            json!({
+                "type": "content_block_stop",
+                "index": 4
+            }),
+        );
+
+        let complete =
+            StdinSessionManager::translate_subagent_stream_event(&stop_event, &mut state);
+        assert_eq!(
+            complete,
+            vec![FrontendSubagentEvent::ToolResultComplete(
+                SubagentToolResultCompletePayload {
+                    session_id: "session_1".to_string(),
+                    parent_tool_use_id: "task_1".to_string(),
+                    tool_use_id: "toolu_1".to_string(),
+                },
+            )]
+        );
+    }
+
+    #[test]
+    fn assistant_message_preserves_parent_tool_use_id() {
+        let manager = StdinSessionManager::new();
+        let assist = AssistantMessage {
+            message: AssistantContent {
+                id: "msg_1".to_string(),
+                content_type: "message".to_string(),
+                role: "assistant".to_string(),
+                model: "claude-test".to_string(),
+                content: vec![ContentBlock::Text {
+                    text: "done".to_string(),
+                }],
+                stop_reason: Some("end_turn".to_string()),
+                usage: Usage {
+                    input_tokens: 1,
+                    output_tokens: 2,
+                    cache_creation_input_tokens: None,
+                    cache_read_input_tokens: None,
+                },
+            },
+            parent_tool_use_id: Some("task_1".to_string()),
+            error: None,
+            uuid: "uuid_1".to_string(),
+            session_id: "session_1".to_string(),
+        };
+
+        let message = manager.create_assistant_message("session_1", &assist);
+
+        assert_eq!(message.parent_tool_use_id.as_deref(), Some("task_1"));
     }
 }

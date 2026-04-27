@@ -4,8 +4,15 @@
  * 支持工具消息分组和子代理嵌套
  */
 
-import type { Message, FeedEntry } from '../types';
+import type { Message, FeedEntry, SubagentRuntimeState } from '../types';
 import { isTodoWriteToolUseBlock } from './todoWrite';
+
+const SUBAGENT_PARENT_TOOL_NAMES = new Set(['Task', 'Agent']);
+
+function isGenericSubagentDescription(value: string | undefined): boolean {
+  const normalized = (value || '').trim();
+  return !normalized || normalized === 'Subagent';
+}
 
 /**
  * 工具项接口
@@ -18,6 +25,12 @@ interface ToolItem {
   isError?: boolean;
 }
 
+interface ParsedToolUseBlock {
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
 /**
  * 任务信息映射
  */
@@ -27,6 +40,37 @@ type TaskInfoMap = Map<string, { description: string; agentType: string }>;
  * 子消息映射
  */
 type ChildrenMap = Map<string, Message[]>;
+type RuntimeMap = Map<string, SubagentRuntimeState>;
+
+function getMessageVisibleText(msg: Message): string {
+  const textFromBlocks = (msg.contentBlocks || [])
+    .filter((block) => block.type === 'text')
+    .map((block) => {
+      const typedBlock = block as { text?: string; content?: unknown };
+      const blockContent = typeof typedBlock.content === 'string' ? typedBlock.content : '';
+      return (typedBlock.text || blockContent || '').trim();
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  return (textFromBlocks || msg.content || '').trim();
+}
+
+function entryHasAssistantFinalResult(entry: FeedEntry): boolean {
+  if (entry.kind === 'message') {
+    return entry.msg.role === 'assistant' && Boolean(getMessageVisibleText(entry.msg));
+  }
+
+  if (entry.kind === 'subagent') {
+    return entry.children.some(entryHasAssistantFinalResult);
+  }
+
+  return false;
+}
+
+function entriesHaveAssistantFinalResult(entries: FeedEntry[]): boolean {
+  return entries.some(entryHasAssistantFinalResult);
+}
 
 /**
  * 判断消息是否为纯工具消息（仅包含相同类型的 tool_use）
@@ -104,26 +148,10 @@ function extractToolItems(msg: Message): ToolItem[] {
   return blocks
     .filter((block) => block.type === 'tool_use')
     .map((block) => {
-      // 解析 tool_use 的 content（可能是 JSON 字符串或对象）
-      let toolData: { id?: string; name?: string; input?: Record<string, unknown> } = {};
-
-      // 如果 content 是字符串，尝试解析为 JSON
-      const blockWithContent = block as unknown as { content?: string | Record<string, unknown> };
-      if (typeof blockWithContent.content === 'string') {
-        try {
-          toolData = JSON.parse(blockWithContent.content);
-        } catch (e) {
-          // 忽略解析错误
-        }
-      } else if (blockWithContent.content) {
-        // content 可能已经是对象
-        toolData = blockWithContent.content as typeof toolData;
-      }
-
-      // 如果 block 本身有 id/name/input，优先使用
-      const id = (block as { id?: string }).id || toolData.id || '';
-      const name = (block as { name?: string }).name || toolData.name || '';
-      const input = (block as { input?: Record<string, unknown> }).input || toolData.input || {};
+      const parsed = parseToolUseBlock(block);
+      const id = parsed?.id || '';
+      const name = parsed?.name || '';
+      const input = parsed?.input || {};
 
       return {
         id,
@@ -135,6 +163,35 @@ function extractToolItems(msg: Message): ToolItem[] {
     });
 }
 
+function parseToolUseBlock(block: unknown): ParsedToolUseBlock | null {
+  if (!block || typeof block !== 'object') return null;
+
+  const typedBlock = block as {
+    id?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+    content?: string | Record<string, unknown>;
+  };
+
+  let contentData: { id?: string; name?: string; input?: Record<string, unknown> } = {};
+
+  if (typeof typedBlock.content === 'string') {
+    try {
+      contentData = JSON.parse(typedBlock.content);
+    } catch {
+      contentData = {};
+    }
+  } else if (typedBlock.content && typeof typedBlock.content === 'object') {
+    contentData = typedBlock.content as typeof contentData;
+  }
+
+  return {
+    id: typedBlock.id || contentData.id || '',
+    name: typedBlock.name || contentData.name || '',
+    input: typedBlock.input || contentData.input || {},
+  };
+}
+
 /**
  * 获取 FeedEntry 中的 Task tool_use ID 列表
  */
@@ -142,11 +199,16 @@ function getTaskIdsFromEntry(entry: FeedEntry): string[] {
   if (entry.kind === 'message') {
     const blocks = entry.msg.contentBlocks || [];
     return blocks
-      .filter((block) => block.type === 'tool_use' && (block as { name?: string }).name === 'Task')
-      .map((block) => (block as { id: string }).id);
+      .filter((block) => {
+        if (block.type !== 'tool_use') return false;
+        const parsed = parseToolUseBlock(block);
+        return !!parsed && SUBAGENT_PARENT_TOOL_NAMES.has(parsed.name);
+      })
+      .map((block) => parseToolUseBlock(block)?.id || '')
+      .filter(Boolean);
   }
 
-  if (entry.kind === 'tool_msg_group' && entry.toolName === 'Task') {
+  if (entry.kind === 'tool_msg_group' && SUBAGENT_PARENT_TOOL_NAMES.has(entry.toolName)) {
     return entry.items.map((item) => item.id);
   }
 
@@ -163,7 +225,7 @@ function getParentToolUseId(msg: Message): string | null {
 /**
  * 分组连续的相同工具消息
  */
-function groupToolMessages(messages: Message[]): FeedEntry[] {
+function groupToolMessages(messages: Message[], runtimeByTask: RuntimeMap): FeedEntry[] {
   const entries: FeedEntry[] = [];
 
   for (const msg of messages) {
@@ -180,6 +242,21 @@ function groupToolMessages(messages: Message[]): FeedEntry[] {
         items: extractToolItems(msg),
         firstId: msg.id,
         timestamp: msg.timestamp,
+        taskRuntimeSummary: SUBAGENT_PARENT_TOOL_NAMES.has(toolName)
+          ? (() => {
+            const taskId = extractToolItems(msg)[0]?.id;
+            const runtime = taskId ? runtimeByTask.get(taskId) : undefined;
+            if (!runtime) return undefined;
+            return {
+              status: runtime.status,
+              elapsedMs: runtime.startedAt
+                ? Math.max(0, (runtime.completedAt ?? Date.now()) - runtime.startedAt)
+                : undefined,
+              toolCallCount: runtime.toolCallCount,
+              latestPreview: runtime.latestPreview,
+            };
+          })()
+          : undefined,
       });
     } else {
       // 普通消息
@@ -196,13 +273,28 @@ function groupToolMessages(messages: Message[]): FeedEntry[] {
 /**
  * 构建包含子代理的 FeedEntry 列表
  */
+function dedupeLiveCallEntries(entries: FeedEntry[], runtime: SubagentRuntimeState | undefined): FeedEntry[] {
+  if (!runtime || runtime.calls.length === 0) {
+    return entries;
+  }
+
+  const liveCallIds = new Set(runtime.calls.map((call) => call.id));
+
+  return entries.filter((entry) => {
+    if (entry.kind !== 'tool_msg_group') return true;
+    if (entry.items.length === 0) return true;
+    return !entry.items.every((item) => liveCallIds.has(item.id));
+  });
+}
+
 function buildEntries(
   messages: Message[],
   taskInfo: TaskInfoMap,
-  childrenByParent: ChildrenMap
+  childrenByParent: ChildrenMap,
+  runtimeByTask: RuntimeMap,
 ): FeedEntry[] {
   // 首先进行工具消息分组
-  const grouped = groupToolMessages(messages);
+  const grouped = groupToolMessages(messages, runtimeByTask);
 
   const result: FeedEntry[] = [];
 
@@ -213,32 +305,55 @@ function buildEntries(
 
     for (const taskId of taskIds) {
       const children = childrenByParent.get(taskId);
+      const runtime = runtimeByTask.get(taskId);
 
-      if (children && children.length > 0) {
+      if ((children && children.length > 0) || runtime) {
         const info = taskInfo.get(taskId) || { description: 'Subagent', agentType: '' };
 
         // 递归构建子代理的子条目
-        const childEntries = buildEntries(children, taskInfo, childrenByParent);
+        const childEntries = children
+          ? dedupeLiveCallEntries(
+            buildEntries(children, taskInfo, childrenByParent, runtimeByTask),
+            runtime,
+          )
+          : [];
+        const hasFinalResult = entriesHaveAssistantFinalResult(childEntries);
 
         subagentEntries.push({
           kind: 'subagent',
           taskToolUseId: taskId,
-          description: info.description,
-          agentType: info.agentType,
+          description: isGenericSubagentDescription(runtime?.description)
+            ? info.description
+            : (runtime?.description || info.description),
+          agentType: runtime?.agentType || info.agentType,
           children: childEntries,
+          liveCalls: runtime?.calls,
+          status: hasFinalResult ? 'completed' : runtime?.status,
+          startedAt: runtime?.startedAt,
+          completedAt: runtime?.completedAt,
+          latestPreview: runtime?.latestPreview,
+          toolCallCount: runtime?.toolCallCount,
         });
       }
     }
 
-    const isTaskToolGroupWithChildren =
-      entry.kind === 'tool_msg_group'
-      && entry.toolName === 'Task'
-      && subagentEntries.length > 0;
+    if (entry.kind === 'tool_msg_group' && subagentEntries.length > 0) {
+      const firstSubagentWithFinalResult = subagentEntries.find((item) => (
+        item.kind === 'subagent' && entriesHaveAssistantFinalResult(item.children)
+      ));
+      const taskRuntimeSummary = firstSubagentWithFinalResult && entry.taskRuntimeSummary
+        ? { ...entry.taskRuntimeSummary, status: 'completed' as const }
+        : entry.taskRuntimeSummary;
 
-    if (!isTaskToolGroupWithChildren) {
-      result.push(entry);
+      result.push({
+        ...entry,
+        taskRuntimeSummary,
+        subagentGroups: subagentEntries.filter((item): item is Extract<FeedEntry, { kind: 'subagent' }> => item.kind === 'subagent'),
+      });
+      continue;
     }
 
+    result.push(entry);
     result.push(...subagentEntries);
   }
 
@@ -248,7 +363,10 @@ function buildEntries(
 /**
  * 主函数：将消息列表转换为分组后的 FeedEntry 列表
  */
-export function groupMessages(messages: Message[]): FeedEntry[] {
+export function groupMessages(
+  messages: Message[],
+  runtimeByTask: RuntimeMap = new Map(),
+): FeedEntry[] {
   // 阶段 1：找出所有 Task tool_use 的 ID
   const taskInfo: TaskInfoMap = new Map();
 
@@ -256,17 +374,14 @@ export function groupMessages(messages: Message[]): FeedEntry[] {
     if (!msg.contentBlocks) continue;
 
     for (const block of msg.contentBlocks) {
-      if (
-        block.type === 'tool_use' &&
-        (block as { name?: string }).name === 'Task'
-      ) {
-        const toolBlock = block as {
-          id: string;
-          input: Record<string, unknown>;
-        };
-        const input = toolBlock.input;
+      if (block.type === 'tool_use') {
+        const parsed = parseToolUseBlock(block);
+        if (!parsed || !SUBAGENT_PARENT_TOOL_NAMES.has(parsed.name) || !parsed.id) {
+          continue;
+        }
+        const input = parsed.input;
 
-        taskInfo.set(toolBlock.id, {
+        taskInfo.set(parsed.id, {
           description: String((input as { description?: unknown }).description || 'Subagent'),
           agentType: String((input as { subagent_type?: unknown }).subagent_type || ''),
         });
@@ -276,7 +391,7 @@ export function groupMessages(messages: Message[]): FeedEntry[] {
 
   // 如果没有 Task tool_use，直接返回工具分组结果
   if (taskInfo.size === 0) {
-    return groupToolMessages(messages);
+    return groupToolMessages(messages, runtimeByTask);
   }
 
   // 阶段 2：将消息分区为顶级消息和子消息
@@ -300,7 +415,7 @@ export function groupMessages(messages: Message[]): FeedEntry[] {
   }
 
   // 阶段 3：构建带有子代理嵌套的分组条目
-  return buildEntries(topLevel, taskInfo, childrenByParent);
+  return buildEntries(topLevel, taskInfo, childrenByParent, runtimeByTask);
 }
 
 /**

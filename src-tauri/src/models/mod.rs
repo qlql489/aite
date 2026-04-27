@@ -52,6 +52,8 @@ pub struct Message {
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checkpoint_uuid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "parent_tool_use_id")]
+    pub parent_tool_use_id: Option<String>,
 
     // 历史消息加载时保留的结构化数据
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -82,6 +84,7 @@ impl Message {
             tool_calls: Vec::new(),
             created_at: chrono::Utc::now(),
             checkpoint_uuid: None,
+            parent_tool_use_id: None,
             content_blocks: None,
             tool_results: None,
             tool_result_errors: None,

@@ -17,7 +17,26 @@ import type {
   GitInfo,
   ModelUsageData,
   ThinkingLevel,
+  SubagentRuntimeState,
+  SubagentToolUseEventPayload,
+  SubagentToolInputDeltaEventPayload,
+  SubagentToolResultStartEventPayload,
+  SubagentToolResultDeltaEventPayload,
+  SubagentToolResultCompleteEventPayload,
+  SubagentRuntimeCall,
+  SubagentRuntimeStatus,
 } from '../types';
+
+const SUBAGENT_PARENT_TOOL_NAMES = new Set(['Task', 'Agent']);
+
+function isGenericSubagentDescription(value: string | undefined): boolean {
+  const normalized = (value || '').trim();
+  return !normalized || normalized === 'Subagent';
+}
+
+function pickPreferredSubagentText(existing: string | undefined, fallback: string): string {
+  return isGenericSubagentDescription(existing) ? fallback : (existing || fallback);
+}
 
 /**
  * useClaudeStore - Claude 状态管理
@@ -81,6 +100,9 @@ export const useClaudeStore = defineStore('claude', () => {
   // ========== Token 使用统计 ==========
   // 记录每个会话的最新 token 使用数据
   const sessionModelUsage = ref<Map<string, ModelUsageData>>(new Map());
+
+  // ========== 子代理运行态 ==========
+  const subagentRuntime = ref<Map<string, Map<string, SubagentRuntimeState>>>(new Map());
 
   // ========== 会话持久化状态 ==========
   // 待持久化的会话（尚未收到后端确认）
@@ -314,6 +336,10 @@ export const useClaudeStore = defineStore('claude', () => {
     newSessionModelUsage.delete(sessionId);
     sessionModelUsage.value = newSessionModelUsage;
 
+    const newSubagentRuntime = new Map(subagentRuntime.value);
+    newSubagentRuntime.delete(sessionId);
+    subagentRuntime.value = newSubagentRuntime;
+
     // 更新 SDK 会话列表
     sdkSessions.value = sdkSessions.value.filter(s => s.sessionId !== sessionId);
 
@@ -450,9 +476,24 @@ export const useClaudeStore = defineStore('claude', () => {
     if (sessionPerms) {
       const updated = new Map(sessionPerms);
       updated.delete(requestId);
-      newPendingPermissions.set(sessionId, updated);
+      if (updated.size > 0) {
+        newPendingPermissions.set(sessionId, updated);
+      } else {
+        newPendingPermissions.delete(sessionId);
+      }
     }
 
+    pendingPermissions.value = newPendingPermissions;
+  }
+
+  /**
+   * 清空指定 session 的权限请求
+   */
+  function clearSessionPermissions(sessionId: string): void {
+    if (!pendingPermissions.value.has(sessionId)) return;
+
+    const newPendingPermissions = new Map(pendingPermissions.value);
+    newPendingPermissions.delete(sessionId);
     pendingPermissions.value = newPendingPermissions;
   }
 
@@ -566,6 +607,376 @@ export const useClaudeStore = defineStore('claude', () => {
     const newModelUsage = new Map(sessionModelUsage.value);
     newModelUsage.set(sessionId, modelUsage);
     sessionModelUsage.value = newModelUsage;
+  }
+
+  function getTaskMeta(
+    sessionId: string,
+    taskToolUseId: string,
+  ): { description: string; agentType: string } {
+    const sessionMessages = messages.value.get(sessionId) || [];
+
+    for (let i = sessionMessages.length - 1; i >= 0; i -= 1) {
+      const message = sessionMessages[i];
+      const blocks = message.contentBlocks || [];
+
+      for (const block of blocks) {
+        if (block.type !== 'tool_use') continue;
+        const toolUseBlock = block as { id?: string; name?: string; input?: Record<string, unknown> };
+        if (toolUseBlock.id !== taskToolUseId || !SUBAGENT_PARENT_TOOL_NAMES.has(toolUseBlock.name || '')) continue;
+
+        const input = toolUseBlock.input || {};
+        return {
+          description: String((input as { description?: unknown }).description || 'Subagent'),
+          agentType: String((input as { subagent_type?: unknown }).subagent_type || ''),
+        };
+      }
+    }
+
+    return {
+      description: 'Subagent',
+      agentType: '',
+    };
+  }
+
+  function getSubagentCallPreview(call: SubagentRuntimeCall): string {
+    const input = call.input || {};
+
+    switch (call.name) {
+      case 'Read':
+      case 'Edit':
+      case 'Write':
+        return String((input.file_path || input.path || '') as string);
+      case 'Bash':
+      case 'Exec':
+        return String((input.command || input.cmd || '') as string);
+      case 'Search':
+      case 'Grep':
+        return String((input.query || input.pattern || '') as string);
+      case 'Glob':
+        return String((input.pattern || '') as string);
+      default: {
+        const values = Object.values(input)
+          .filter((value) => value !== undefined && value !== null)
+          .map((value) => (typeof value === 'string' ? value : JSON.stringify(value)))
+          .filter((value) => value.trim().length > 0);
+        return values[0] || '';
+      }
+    }
+  }
+
+  function recomputeSubagentRuntimeState(state: SubagentRuntimeState): SubagentRuntimeState {
+    const calls = [...state.calls].sort((a, b) => a.startedAt - b.startedAt);
+    const hasError = calls.some((call) => call.status === 'error' || call.isError);
+    const hasRunning = calls.some((call) => call.status === 'running');
+    const latestCall = calls[calls.length - 1];
+    const latestPreview = latestCall
+      ? [latestCall.name, getSubagentCallPreview(latestCall)].filter(Boolean).join(' ')
+      : state.latestPreview;
+    const completedAt = hasRunning
+      ? undefined
+      : calls.reduce<number | undefined>((acc, call) => {
+        if (!call.completedAt) return acc;
+        return acc === undefined ? call.completedAt : Math.max(acc, call.completedAt);
+      }, state.completedAt);
+
+    return {
+      ...state,
+      calls,
+      toolCallCount: calls.length,
+      latestPreview,
+      status: hasRunning ? 'running' : (hasError ? 'error' : 'completed'),
+      completedAt,
+    };
+  }
+
+  function updateSubagentRuntimeState(
+    sessionId: string,
+    taskToolUseId: string,
+    updater: (existing: SubagentRuntimeState | undefined, now: number) => SubagentRuntimeState,
+  ): void {
+    const now = Date.now();
+    const sessionMap = new Map(subagentRuntime.value.get(sessionId) || []);
+    const nextState = recomputeSubagentRuntimeState(updater(sessionMap.get(taskToolUseId), now));
+    sessionMap.set(taskToolUseId, nextState);
+
+    const nextRuntime = new Map(subagentRuntime.value);
+    nextRuntime.set(sessionId, sessionMap);
+    subagentRuntime.value = nextRuntime;
+  }
+
+  function clearSessionSubagentRuntime(sessionId: string): void {
+    const nextRuntime = new Map(subagentRuntime.value);
+    nextRuntime.delete(sessionId);
+    subagentRuntime.value = nextRuntime;
+  }
+
+  function upsertSubagentToolUse(sessionId: string, payload: SubagentToolUseEventPayload): void {
+    updateSubagentRuntimeState(sessionId, payload.parentToolUseId, (existing, now) => {
+      const meta = getTaskMeta(sessionId, payload.parentToolUseId);
+      const startedAt = payload.elapsedTimeSeconds != null
+        ? now - Math.max(0, Math.round(payload.elapsedTimeSeconds * 1000))
+        : existing?.startedAt ?? now;
+      const nextCalls = [...(existing?.calls || [])];
+      const callIndex = nextCalls.findIndex((call) => call.id === payload.toolUseId);
+
+      if (callIndex === -1) {
+        nextCalls.push({
+          id: payload.toolUseId,
+          name: payload.toolName || 'Tool',
+          input: payload.input || {},
+          inputJson: payload.input ? JSON.stringify(payload.input, null, 2) : undefined,
+          status: 'running',
+          startedAt,
+          updatedAt: now,
+        });
+      } else {
+        const existingCall = nextCalls[callIndex];
+        nextCalls[callIndex] = {
+          ...existingCall,
+          name: payload.toolName || existingCall.name,
+          input: payload.input ?? existingCall.input,
+          inputJson: payload.input
+            ? JSON.stringify(payload.input, null, 2)
+            : existingCall.inputJson,
+          updatedAt: now,
+          startedAt: Math.min(existingCall.startedAt, startedAt),
+          status: existingCall.status === 'completed' || existingCall.status === 'error'
+            ? existingCall.status
+            : 'running',
+        };
+      }
+
+      return {
+        taskToolUseId: payload.parentToolUseId,
+        description: pickPreferredSubagentText(existing?.description, meta.description),
+        agentType: existing?.agentType || meta.agentType,
+        status: 'running',
+        startedAt,
+        latestPreview: existing?.latestPreview,
+        toolCallCount: nextCalls.length,
+        calls: nextCalls,
+      };
+    });
+  }
+
+  function appendSubagentToolInputDelta(
+    sessionId: string,
+    payload: SubagentToolInputDeltaEventPayload,
+  ): void {
+    updateSubagentRuntimeState(sessionId, payload.parentToolUseId, (existing, now) => {
+      const meta = getTaskMeta(sessionId, payload.parentToolUseId);
+      const nextCalls = [...(existing?.calls || [])];
+      const callIndex = nextCalls.findIndex((call) => call.id === payload.toolUseId);
+
+      if (callIndex === -1) {
+        nextCalls.push({
+          id: payload.toolUseId,
+          name: 'Tool',
+          input: {},
+          inputJson: payload.delta,
+          status: 'running',
+          startedAt: now,
+          updatedAt: now,
+        });
+      } else {
+        const existingCall = nextCalls[callIndex];
+        const inputJson = `${existingCall.inputJson || ''}${payload.delta}`;
+        let input = existingCall.input;
+
+        try {
+          const parsed = JSON.parse(inputJson);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            input = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // ignore partial JSON
+        }
+
+        nextCalls[callIndex] = {
+          ...existingCall,
+          inputJson,
+          input,
+          updatedAt: now,
+          status: existingCall.status === 'completed' || existingCall.status === 'error'
+            ? existingCall.status
+            : 'running',
+        };
+      }
+
+      return {
+        taskToolUseId: payload.parentToolUseId,
+        description: pickPreferredSubagentText(existing?.description, meta.description),
+        agentType: existing?.agentType || meta.agentType,
+        status: 'running',
+        startedAt: existing?.startedAt ?? now,
+        latestPreview: existing?.latestPreview,
+        toolCallCount: nextCalls.length,
+        calls: nextCalls,
+      };
+    });
+  }
+
+  function startSubagentToolResult(
+    sessionId: string,
+    payload: SubagentToolResultStartEventPayload,
+  ): void {
+    updateSubagentRuntimeState(sessionId, payload.parentToolUseId, (existing, now) => {
+      const meta = getTaskMeta(sessionId, payload.parentToolUseId);
+      const nextCalls = [...(existing?.calls || [])];
+      const callIndex = nextCalls.findIndex((call) => call.id === payload.toolUseId);
+
+      if (callIndex === -1) {
+        nextCalls.push({
+          id: payload.toolUseId,
+          name: 'Tool',
+          input: {},
+          result: payload.content,
+          status: payload.isError ? 'error' : 'running',
+          isError: payload.isError,
+          startedAt: now,
+          updatedAt: now,
+        });
+      } else {
+        const existingCall = nextCalls[callIndex];
+        nextCalls[callIndex] = {
+          ...existingCall,
+          result: payload.content,
+          isError: payload.isError ?? existingCall.isError,
+          status: payload.isError ? 'error' : existingCall.status,
+          updatedAt: now,
+        };
+      }
+
+      return {
+        taskToolUseId: payload.parentToolUseId,
+        description: pickPreferredSubagentText(existing?.description, meta.description),
+        agentType: existing?.agentType || meta.agentType,
+        status: 'running',
+        startedAt: existing?.startedAt ?? now,
+        latestPreview: existing?.latestPreview,
+        toolCallCount: nextCalls.length,
+        calls: nextCalls,
+      };
+    });
+  }
+
+  function appendSubagentToolResultDelta(
+    sessionId: string,
+    payload: SubagentToolResultDeltaEventPayload,
+  ): void {
+    updateSubagentRuntimeState(sessionId, payload.parentToolUseId, (existing, now) => {
+      const meta = getTaskMeta(sessionId, payload.parentToolUseId);
+      const nextCalls = [...(existing?.calls || [])];
+      const callIndex = nextCalls.findIndex((call) => call.id === payload.toolUseId);
+
+      if (callIndex === -1) {
+        nextCalls.push({
+          id: payload.toolUseId,
+          name: 'Tool',
+          input: {},
+          result: payload.delta,
+          status: 'running',
+          startedAt: now,
+          updatedAt: now,
+        });
+      } else {
+        const existingCall = nextCalls[callIndex];
+        nextCalls[callIndex] = {
+          ...existingCall,
+          result: `${existingCall.result || ''}${payload.delta}`,
+          updatedAt: now,
+          status: existingCall.status === 'completed' || existingCall.status === 'error'
+            ? existingCall.status
+            : 'running',
+        };
+      }
+
+      return {
+        taskToolUseId: payload.parentToolUseId,
+        description: pickPreferredSubagentText(existing?.description, meta.description),
+        agentType: existing?.agentType || meta.agentType,
+        status: 'running',
+        startedAt: existing?.startedAt ?? now,
+        latestPreview: existing?.latestPreview,
+        toolCallCount: nextCalls.length,
+        calls: nextCalls,
+      };
+    });
+  }
+
+  function completeSubagentToolResult(
+    sessionId: string,
+    payload: SubagentToolResultCompleteEventPayload,
+  ): void {
+    updateSubagentRuntimeState(sessionId, payload.parentToolUseId, (existing, now) => {
+      const meta = getTaskMeta(sessionId, payload.parentToolUseId);
+      const nextCalls = [...(existing?.calls || [])];
+      const callIndex = nextCalls.findIndex((call) => call.id === payload.toolUseId);
+
+      if (callIndex === -1) {
+        nextCalls.push({
+          id: payload.toolUseId,
+          name: 'Tool',
+          input: {},
+          status: 'completed',
+          startedAt: now,
+          updatedAt: now,
+          completedAt: now,
+        });
+      } else {
+        const existingCall = nextCalls[callIndex];
+        nextCalls[callIndex] = {
+          ...existingCall,
+          status: existingCall.isError ? 'error' : 'completed',
+          updatedAt: now,
+          completedAt: now,
+        };
+      }
+
+      return {
+        taskToolUseId: payload.parentToolUseId,
+        description: pickPreferredSubagentText(existing?.description, meta.description),
+        agentType: existing?.agentType || meta.agentType,
+        status: 'running',
+        startedAt: existing?.startedAt ?? now,
+        latestPreview: existing?.latestPreview,
+        toolCallCount: nextCalls.length,
+        calls: nextCalls,
+      };
+    });
+  }
+
+  function finalizeSessionSubagentRuntime(sessionId: string): void {
+    const sessionMap = subagentRuntime.value.get(sessionId);
+    if (!sessionMap || sessionMap.size === 0) return;
+
+    const now = Date.now();
+    const nextSessionMap = new Map<string, SubagentRuntimeState>();
+
+    for (const [taskToolUseId, state] of sessionMap.entries()) {
+      const finalizedCalls = state.calls.map((call) => {
+        if (call.status !== 'running') return call;
+        return {
+          ...call,
+          status: call.isError ? 'error' as SubagentRuntimeStatus : 'completed' as SubagentRuntimeStatus,
+          updatedAt: now,
+          completedAt: now,
+        };
+      });
+
+      nextSessionMap.set(
+        taskToolUseId,
+        recomputeSubagentRuntimeState({
+          ...state,
+          calls: finalizedCalls,
+          completedAt: now,
+        }),
+      );
+    }
+
+    const nextRuntime = new Map(subagentRuntime.value);
+    nextRuntime.set(sessionId, nextSessionMap);
+    subagentRuntime.value = nextRuntime;
   }
 
   // ========== UI 操作 ==========
@@ -716,6 +1127,7 @@ export const useClaudeStore = defineStore('claude', () => {
     sessionNames.value = new Map();
     sessionGitInfo.value = new Map();
     sessionModelUsage.value = new Map();
+    subagentRuntime.value = new Map();
   }
 
   // ========== 辅助函数 ==========
@@ -1034,6 +1446,14 @@ export const useClaudeStore = defineStore('claude', () => {
       sessionModelUsage.value = newSessionModelUsage;
     }
 
+    const newSubagentRuntime = new Map(subagentRuntime.value);
+    const runtime = newSubagentRuntime.get(oldSessionId);
+    if (runtime !== undefined) {
+      newSubagentRuntime.set(newSessionId, runtime);
+      newSubagentRuntime.delete(oldSessionId);
+      subagentRuntime.value = newSubagentRuntime;
+    }
+
     // 更新 sessionTasks
     const newSessionTasks = new Map(sessionTasks.value);
     const tasks = newSessionTasks.get(oldSessionId);
@@ -1078,6 +1498,7 @@ export const useClaudeStore = defineStore('claude', () => {
     sessionNames,
     sessionGitInfo,
     sessionModelUsage,
+    subagentRuntime,
     darkMode,
     sidebarOpen,
     taskPanelOpen,
@@ -1124,6 +1545,7 @@ export const useClaudeStore = defineStore('claude', () => {
     // 权限操作
     addPermission,
     removePermission,
+    clearSessionPermissions,
     findPermissionSessionId,
     getPermission,
     setPreviousPermissionMode,
@@ -1139,6 +1561,13 @@ export const useClaudeStore = defineStore('claude', () => {
     setSessionStatus,
     setSessionGitInfo,
     setSessionModelUsage,
+    clearSessionSubagentRuntime,
+    upsertSubagentToolUse,
+    appendSubagentToolInputDelta,
+    startSubagentToolResult,
+    appendSubagentToolResultDelta,
+    completeSubagentToolResult,
+    finalizeSessionSubagentRuntime,
 
     // UI 操作
     setDarkMode,

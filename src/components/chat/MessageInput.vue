@@ -20,6 +20,14 @@ import GitStatus from './GitStatus.vue';
 import IDEStatus from './IDEStatus.vue';
 import TodoWriteDock from './TodoWriteDock.vue';
 
+interface ProviderModelOption {
+  key: string;
+  label: string;
+  providerId: string;
+  model: string;
+  providerOverrideEnabled: boolean;
+}
+
 interface FileReference {
   id: string;
   name: string;
@@ -133,22 +141,11 @@ const currentProjectRoot = computed(() => {
   return claudeStore.currentSession?.cwd || props.projectPath || '';
 });
 
-const currentSessionProviderId = computed(() => {
-  const session = claudeStore.currentSession;
-  if (!session) return providerStore.activeProviderId;
-  if (session.providerOverrideEnabled && session.providerId) return session.providerId;
-  return providerStore.activeProviderId;
-});
-
 const currentSessionProvider = computed(() => {
   return providerStore.resolveSessionProvider(
     claudeStore.currentSession?.providerId,
     claudeStore.currentSession?.providerOverrideEnabled,
   );
-});
-
-const availableProviderModels = computed(() => {
-  return currentSessionProvider.value?.models || [];
 });
 
 const currentSessionModel = computed(() => {
@@ -205,18 +202,34 @@ const thinkingLevelTextWidth = computed(() => {
   );
 });
 
-const providerSelectWidth = computed(() => {
+const providerModelOptions = computed<ProviderModelOption[]>(() => {
+  const defaultProviderId = providerStore.activeProviderId;
+
+  return providerStore.providers.flatMap((provider) => {
+    return provider.models
+      .filter((model) => model.model.trim())
+      .map((model) => ({
+        key: `${provider.id}::${model.model}`,
+        label: `${provider.name} - ${model.modelName || model.model}`,
+        providerId: provider.id,
+        model: model.model,
+        providerOverrideEnabled: provider.id !== defaultProviderId,
+      }));
+  });
+});
+
+const providerModelSelectWidth = computed(() => {
   return buildFixedWidth(
-    ['默认供应商', ...providerStore.providers.map((provider) => provider.name)],
-    { min: 10, max: 22, padding: 1.8 },
+    ['选择供应商 - 模型', ...providerModelOptions.value.map((option) => option.label)],
+    { min: 16, max: 30, padding: 1.8 },
   );
 });
 
-const modelSelectWidth = computed(() => {
-  return buildFixedWidth(
-    ['选择模型', ...availableProviderModels.value.map((model) => model.modelName)],
-    { min: 10, max: 28, padding: 1.8 },
-  );
+const currentProviderModelValue = computed(() => {
+  const provider = currentSessionProvider.value;
+  const model = currentSessionModel.value;
+  if (!provider?.id || !model) return '';
+  return `${provider.id}::${model}`;
 });
 
 
@@ -323,44 +336,24 @@ const setThinkingLevel = async (level: ThinkingLevel, event?: Event) => {
   }
 };
 
-const setSessionProvider = async (providerId: string | null) => {
+const setSessionProviderModel = async (selectionKey: string | null) => {
   const session = claudeStore.currentSession;
-  if (!session?.sessionId || isRestartingProvider.value) return;
+  if (!session?.sessionId || !selectionKey || isRestartingProvider.value) return;
 
-  const providerOverrideEnabled = !!providerId && providerId !== providerStore.activeProviderId;
-  const resolvedProvider = providerStore.resolveSessionProvider(providerId, providerOverrideEnabled);
-  const nextModel = resolvedProvider
-    ? providerStore.resolveSessionModel(providerId, session.model, providerOverrideEnabled)
-    : null;
+  const selectedOption = providerModelOptions.value.find((option) => option.key === selectionKey);
+  if (!selectedOption) return;
+
+  const providerId = selectedOption.providerOverrideEnabled ? selectedOption.providerId : null;
 
   isRestartingProvider.value = true;
   try {
     await restartSessionWithCurrentConfig({
       providerId,
-      providerOverrideEnabled,
-      model: nextModel,
+      providerOverrideEnabled: selectedOption.providerOverrideEnabled,
+      model: selectedOption.model,
     });
   } catch (error) {
-    console.error('[Provider] Failed to switch provider:', error);
-    claudeStore.setConnectionStatus(session.sessionId, 'disconnected');
-  } finally {
-    isRestartingProvider.value = false;
-  }
-};
-
-const setSessionModel = async (model: string | null) => {
-  const session = claudeStore.currentSession;
-  if (!session?.sessionId || !model || isRestartingProvider.value) return;
-
-  isRestartingProvider.value = true;
-  try {
-    await restartSessionWithCurrentConfig({
-      providerId: currentSessionProviderId.value,
-      providerOverrideEnabled: !!session.providerOverrideEnabled,
-      model,
-    });
-  } catch (error) {
-    console.error('[Provider] Failed to switch model:', error);
+    console.error('[Provider] Failed to switch provider-model:', error);
     claudeStore.setConnectionStatus(session.sessionId, 'disconnected');
   } finally {
     isRestartingProvider.value = false;
@@ -2419,38 +2412,18 @@ onUnmounted(() => {
               </span>
               <select
                 class="session-select permission-like-select"
-                :value="currentSessionProviderId || ''"
-                :style="{ width: providerSelectWidth }"
+                :value="currentProviderModelValue"
+                :style="{ width: providerModelSelectWidth }"
                 :disabled="disabled || isRestartingProvider"
-                @change="setSessionProvider(($event.target as HTMLSelectElement).value || null)"
+                @change="setSessionProviderModel(($event.target as HTMLSelectElement).value || null)"
               >
-                <option value="">默认供应商</option>
-                <option v-for="provider in providerStore.providers" :key="provider.id" :value="provider.id">
-                  {{ provider.name }}
-                </option>
-              </select>
-            </label>
-
-            <label class="session-select-shell">
-              <span class="session-select-icon" aria-hidden="true">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="4" y="6" width="16" height="12" rx="2"/>
-                  <path d="M8 2v4"/>
-                  <path d="M16 2v4"/>
-                  <path d="M8 18v4"/>
-                  <path d="M16 18v4"/>
-                </svg>
-              </span>
-              <select
-                class="session-select permission-like-select"
-                :value="currentSessionModel || ''"
-                :style="{ width: modelSelectWidth }"
-                :disabled="disabled || isRestartingProvider || !availableProviderModels.length"
-                @change="setSessionModel(($event.target as HTMLSelectElement).value || null)"
-              >
-                <option value="">选择模型</option>
-                <option v-for="model in availableProviderModels" :key="model.model" :value="model.model">
-                  {{ model.modelName }}
+                <option value="" disabled>选择供应商 - 模型</option>
+                <option
+                  v-for="option in providerModelOptions"
+                  :key="option.key"
+                  :value="option.key"
+                >
+                  {{ option.label }}
                 </option>
               </select>
             </label>

@@ -61,8 +61,24 @@ const formattedTime = computed(() => {
 const isStructuredContent = computed(() => {
   try {
     const parsed = JSON.parse(props.message.content);
+    if (typeof parsed === 'string') {
+      const reparsed = JSON.parse(parsed);
+      return Array.isArray(reparsed) || typeof reparsed === 'object';
+    }
     return Array.isArray(parsed) || typeof parsed === 'object';
   } catch {
+    if (props.message.content.includes('\\"')) {
+      try {
+        const normalized = props.message.content
+          .replace(/\\"/g, '"')
+          .replace(/\\n/g, '\n')
+          .replace(/\\t/g, '\t');
+        const reparsed = JSON.parse(normalized);
+        return Array.isArray(reparsed) || typeof reparsed === 'object';
+      } catch {
+        // ignore
+      }
+    }
     return false;
   }
 });
@@ -71,9 +87,21 @@ const isStructuredContent = computed(() => {
 const structuredContent = computed(() => {
   if (!isStructuredContent.value) return null;
   try {
-    return JSON.parse(props.message.content);
+    const parsed = JSON.parse(props.message.content);
+    if (typeof parsed === 'string') {
+      return JSON.parse(parsed);
+    }
+    return parsed;
   } catch {
-    return null;
+    try {
+      const normalized = props.message.content
+        .replace(/\\"/g, '"')
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t');
+      return JSON.parse(normalized);
+    } catch {
+      return null;
+    }
   }
 });
 

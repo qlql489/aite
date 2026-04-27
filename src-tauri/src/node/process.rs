@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_node_process_creation() {
-        let process = NodeProcess::new();
+        let mut process = NodeProcess::new();
         assert!(!process.is_running());
     }
 

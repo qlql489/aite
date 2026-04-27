@@ -6,7 +6,7 @@
 
 ### A Desktop Client for Claude Code
 
-Manage projects, sessions, permissions, file references, extensions, and usage stats in one desktop workspace.
+Bring project management, session switching, message browsing, tool call tracking, and permission approval back into one clear desktop interface.
 
 [![Release](https://img.shields.io/badge/release-v0.1.0-1688d9?style=flat-square)](#)
 [![License](https://img.shields.io/badge/license-Apache%202.0-97CA00?style=flat-square)](LICENSE)
@@ -15,120 +15,189 @@ Manage projects, sessions, permissions, file references, extensions, and usage s
 
 **[中文](README.md)** | **[English](README_EN.md)**
 
+<p align="center">
+  <a href="#what-is-aite">What is Aite</a> ·
+  <a href="#desktop-preview">Screenshots</a> ·
+  <a href="#architecture-overview">Architecture</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#more-docs">More Docs</a>
+</p>
+
 </div>
 
-## What is Aite
+## What Is Aite
 
-Aite is a desktop workspace built around everyday Claude Code usage.
+Aite is a desktop client built around the daily Claude Code workflow.
 
-It brings the most common workflows into one interface:
+Aite addresses the friction of using Claude Code purely in the terminal: switching across projects is cumbersome, browsing history is tedious, and tool activity lacks visibility. It provides a more efficient desktop workspace for those flows.
 
-- manage local projects
-- create, resume, switch, and search sessions
-- review thinking, tool calls, tasks, and sub-agent activity
-- approve edits, commands, and plan execution
-- attach files, folders, images, and references directly in chat
-- configure providers, MCP, skills, commands, and updates
+<a id="desktop-preview"></a>
+## Desktop Preview
 
-## Highlights
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="img/main.png" alt="Main interface" />
+      <br />
+      <sub>Main interface</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="img/diff.png" alt="Tool calls and diff view" />
+      <br />
+      <sub>Tool calls and diff view</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="img/permission.png" alt="Permission review" />
+      <br />
+      <sub>Permission review</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="img/skill.png" alt="Skill management" />
+      <br />
+      <sub>Skill management</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="img/mcp.png" alt="MCP management" />
+      <br />
+      <sub>MCP management</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="img/provider.png" alt="Anthropic and OpenAI provider management" />
+      <br />
+      <sub>Anthropic and OpenAI provider management</sub>
+    </td>
+  </tr>
+</table>
 
-### Multi-session workflow
-
-- independent session management
-- fast switching, refresh, and resume support
-- automatic session titles
-- draft session reuse
-- session and project search
-
-### Permission control
-
-- plan, edit, read-only, and bypass modes
-- inline approval inside chat
-- approval buttons beside tool calls
-- session-level always-allow flow
-
-### Better chat experience
-
-- stable streaming output
-- grouped messages
-- thinking, tool use, tool result, task, sub-agent, and image support
-- diff view for edit/write actions
-- dedicated AskUserQuestion cards
-
-### File and attachment workflow
-
-- `@` file references in the input box
-- folder references and folder attachments
-- linked file search while typing
-- image upload and generic attachments
-
-### Workspace and extension support
-
-- project tree and inline file editor
-- Git status and branch actions
-- worktree mode
-- MCP server management
-- skills and slash commands
-
-### Settings and updates
-
-- Claude CLI argument management
-- usage and token statistics
-- auto-update flow
-
-## Who is it for
-
-- people who run multiple Claude Code sessions
-- people who want better session, context, and permission management
-- people who frequently reference files, folders, and images while chatting
-
-## Availability
-
-This project is now public. You can get the source code from the repository and use GitHub Actions artifacts or future releases for builds and updates.
-
-## Screenshots
-
-Product screenshots will be added in a future update.
-
-## Installation Notes
-
-- Available on macOS 11.2+ and Windows 10+
-- On first launch, Aite checks Claude Code CLI and required runtime dependencies
-- If Node.js or npm is missing, Aite will guide the installation flow when needed
-- After updating, restarting the app once is recommended
-
-## FAQ
-
-### Do I need to install Claude Code CLI first
-
-Not always.
-
-If Claude Code CLI is not available on the machine, Aite will detect it and guide the setup flow when required.
-
-### Why does Aite check Node.js or npm on first launch
-
-Because Claude Code CLI depends on that runtime. Aite verifies the environment first so the install flow can continue correctly.
-
-### Can I manage multiple projects and sessions
-
-Yes. Multi-project and multi-session workflow is one of the main goals of Aite.
-
-### Do I need to reconfigure everything after an update
-
-Usually no. Most sessions, projects, and settings remain available, but checking provider and extension status after an update is still recommended.
-
-## More Docs
-
-- [Changelog](CHANGELOG.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
-- [Auto Update Guide](docs/自动更新接入说明.md)
-- [Build Guide](docs/安装包构建说明.md)
-
+<a id="quick-start"></a>
 ## Quick Start
 
-1. Open Aite
-2. Import a local project
-3. Create a new session or resume an existing one
-4. Start chatting and reference files or images when needed
-5. Approve permissions, switch modes, and review tool activity in the same window
+### Requirements
+
+- [Claude Code](https://github.com/anthropics/claude-code) — Aite depends on the Claude Code CLI and can help detect and install it.
+
+### Download
+
+For macOS:
+
+Download the `.dmg` file from [Releases](https://github.com/qlql489/aite/releases) and install it by double-clicking.
+Both Apple Silicon (`arm64`) and Intel (`x86_64`) are supported.
+
+For Windows:
+
+Download the `.msi` installer from [Releases](https://github.com/qlql489/aite/releases) and run it.
+
+<a id="features"></a>
+## Key Features
+
+### Multi-project and session management
+
+Stop juggling terminal windows and manage local projects together with Claude Code sessions in one place.
+
+- Quickly import and switch local projects
+- Create, resume, and persist sessions
+- Search historical sessions and jump back fast
+
+### Message and tool visualization
+
+Make every Claude Code interaction visible and easy to inspect.
+
+- Stream all message types including thinking, tool calls, subagents, and images
+- Present tool calls in a structured way, with diff views for `Edit` and `Write`
+- Review permission requests directly inside the chat stream, with approve, reject, and always-allow actions
+- Visualize todo progress and completion state
+
+### File and code collaboration
+
+Integrate smoothly with local project workflows.
+
+- `@` file references, with support for directories, images, and file attachments
+- Workspace tree browsing and inline file editing
+- Integrated Git status, branch, and change information
+- VSCode IDE context injection support
+
+### Configuration and extension management
+
+Replace command-line-heavy configuration with a visual interface.
+
+- Unified management for MCP servers, skills, and commands
+- Model switching and thinking-level selection
+- Token usage statistics and CLI argument configuration
+
+<a id="architecture-overview"></a>
+## Architecture Overview
+
+- **Desktop container**: Built on Tauri 2.0 for a compact install size, fast startup, and cross-platform support
+- **Frontend UI**: Vue 3 + TypeScript + Vite for the desktop interaction layer
+- **Local capability bridge**: Rust and a Node backend cooperate to handle CLI, files, Git, and provider bridge logic
+- **State and rendering**: Pinia drives state management, while Markdown rendering, code highlighting, and tool-call views power message visualization
+
+## Tech Stack
+
+Aite uses a modern desktop application stack to stay lightweight, efficient, and cross-platform.
+
+| Layer | Technology |
+|------|----------|
+| **Desktop framework** | [Tauri 2.0](https://tauri.app) — lightweight desktop framework powered by Rust |
+| **Frontend** | Vue 3 + TypeScript + Vite |
+| **State management** | Pinia |
+| **UI icons** | HugeIcons |
+| **Backend** | Rust (Tokio async runtime) |
+| **Markdown rendering** | marked + DOMPurify |
+| **Code highlighting** | highlight.js |
+
+## Roadmap
+
+- **Computer Use** — support desktop automation workflows for Claude
+- **Scheduled tasks** — support cron-based command execution
+- **Lark integration** — support Lark APIs for messaging, calendars, documents, and more
+
+<a id="environment-variables"></a>
+## Environment Variables
+
+The current version prefers managing Claude Code, model providers, MCP servers, and CLI arguments through the Aite GUI.
+
+If you are just using the desktop client normally, you usually do not need to maintain complex environment variables manually. This section can be expanded later if standalone documentation is added.
+
+<a id="faq"></a>
+## FAQ
+
+### What runtime does Aite depend on?
+
+It depends on a locally installed [Claude Code](https://github.com/anthropics/claude-code). On first launch, Aite helps detect and install it if needed.
+
+### What is Aite best suited for?
+
+It is a strong fit if you frequently switch between projects, revisit historical messages, inspect tool-call details, or want Claude Code to feel like part of your desktop workflow instead of a terminal-only tool.
+
+<a id="global-usage"></a>
+## Using It Alongside CLI Workflows
+
+Aite itself is a desktop client, and the recommended path is to manage sessions and projects through the GUI. If you prefer terminal-heavy workflows, you can still use it alongside your local Claude Code CLI setup.
+
+<a id="more-docs"></a>
+## More Docs
+
+### Author
+
+This project is fully developed independently by [qlql489](https://github.com/qlql489/aite).
+
+## Contact
+
+This project is developed independently by [qlql489](https://github.com/qlql489/aite) in spare time. Sponsorship from individuals or companies is welcome to support continued iteration. If you have custom development, system integration, or business collaboration needs, feel free to get in touch.
+
+## Community Group
+
+Scan the QR code to join the group and share usage feedback, report issues, and discuss future features together.
+
+<img src="img/group.jpg" width="200" alt="Aite WeChat community QR code" />
+
+## Support the Project
+
+If this project helps you, you can support it here:
+
+<img src="img/wechat.jpg" width="200" alt="WeChat donation QR code" />

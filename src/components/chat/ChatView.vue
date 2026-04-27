@@ -3,7 +3,17 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useClaudeStore } from '../../stores/claude';
-import type { PermissionMode, PermissionRequest, GitInfo, OutgoingMessagePayload } from '../../types';
+import type {
+  PermissionMode,
+  PermissionRequest,
+  GitInfo,
+  OutgoingMessagePayload,
+  SubagentToolUseEventPayload,
+  SubagentToolInputDeltaEventPayload,
+  SubagentToolResultStartEventPayload,
+  SubagentToolResultDeltaEventPayload,
+  SubagentToolResultCompleteEventPayload,
+} from '../../types';
 import MessageList from './MessageList.vue';
 import MessageInput from './MessageInput.vue';
 import GitStatus from './GitStatus.vue';
@@ -132,6 +142,11 @@ const streamingStartedAt = computed(() => {
 const currentMessages = computed(() => {
   if (!props.sessionId) return [];
   return claudeStore.messages.get(props.sessionId) || [];
+});
+
+const currentSubagentRuntime = computed(() => {
+  if (!props.sessionId) return new Map();
+  return claudeStore.subagentRuntime.get(props.sessionId) || new Map();
 });
 
 const todoPanelState = computed(() => extractTodoWritePanelState(currentMessages.value));
@@ -282,10 +297,55 @@ onMounted(async () => {
     }
   });
 
+  const unlistenSubagentToolUse = await listen<SubagentToolUseEventPayload>(
+    'claude:subagent_tool_use',
+    (event) => {
+      const data = event.payload;
+      claudeStore.upsertSubagentToolUse(data.sessionId, data);
+    },
+  );
+
+  const unlistenSubagentToolInputDelta = await listen<SubagentToolInputDeltaEventPayload>(
+    'claude:subagent_tool_input_delta',
+    (event) => {
+      const data = event.payload;
+      claudeStore.appendSubagentToolInputDelta(data.sessionId, data);
+    },
+  );
+
+  const unlistenSubagentToolResultStart = await listen<SubagentToolResultStartEventPayload>(
+    'claude:subagent_tool_result_start',
+    (event) => {
+      const data = event.payload;
+      claudeStore.startSubagentToolResult(data.sessionId, data);
+    },
+  );
+
+  const unlistenSubagentToolResultDelta = await listen<SubagentToolResultDeltaEventPayload>(
+    'claude:subagent_tool_result_delta',
+    (event) => {
+      const data = event.payload;
+      claudeStore.appendSubagentToolResultDelta(data.sessionId, data);
+    },
+  );
+
+  const unlistenSubagentToolResultComplete = await listen<SubagentToolResultCompleteEventPayload>(
+    'claude:subagent_tool_result_complete',
+    (event) => {
+      const data = event.payload;
+      claudeStore.completeSubagentToolResult(data.sessionId, data);
+    },
+  );
+
   // 清理监听器
   onUnmounted(() => {
     unlistenPermission();
     unlistenGit();
+    unlistenSubagentToolUse();
+    unlistenSubagentToolInputDelta();
+    unlistenSubagentToolResultStart();
+    unlistenSubagentToolResultDelta();
+    unlistenSubagentToolResultComplete();
   });
 });
 
@@ -482,6 +542,7 @@ onUnmounted(() => {
       :is-streaming="isBusy"
       :pending-permissions="pendingPermissions"
       :session-id="sessionId || ''"
+      :subagent-runtime="currentSubagentRuntime"
       :search-query="sessionSearchQuery"
       :active-search-result-index="sessionSearchActiveIndex"
       @approve="approvePermission"

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onUnmounted } from 'vue';
 import ToolDiffView from './ToolDiffView.vue';
-import type { PermissionRequest } from '../../types';
+import type { PermissionRequest, TaskRuntimeSummary } from '../../types';
+import { formatElapsed } from '../../utils/messageGrouping';
 
 interface Props {
   name: string;
@@ -17,6 +18,9 @@ interface Props {
   onApprove?: (requestId: string) => void;
   onReject?: (requestId: string, reason?: string) => void;
   permission?: PermissionRequest;  // 关联的权限请求
+  taskRuntimeSummary?: TaskRuntimeSummary;
+  embedded?: boolean;
+  initialExpanded?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -24,6 +28,8 @@ const props = withDefaults(defineProps<Props>(), {
   isError: false,
   cwd: '',
   cornerStyle: 'all',
+  embedded: false,
+  initialExpanded: false,
 });
 
 // 跟踪"已批准但等待结果"的状态
@@ -102,10 +108,11 @@ const emit = defineEmits<{
   approve: [requestId: string, updatedInput?: Record<string, unknown>];
   approveAlways: [requestId: string];
   reject: [requestId: string, reason?: string];
+  expandedChange: [expanded: boolean];
 }>();
 
 // 默认不展开，用户手动点击展开
-const expanded = ref(false);
+const expanded = ref(props.initialExpanded);
 const copied = ref(false);
 let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -294,6 +301,7 @@ const grepSummary = computed(() => {
 });
 
 const isSkillTool = computed(() => props.name === 'Skill');
+const isExitPlanModeTool = computed(() => props.name === 'ExitPlanMode');
 
 const skillSummary = computed(() => {
   if (props.result?.trim()) {
@@ -305,6 +313,17 @@ const skillSummary = computed(() => {
 });
 
 const canExpand = computed(() => !isSkillTool.value || !!props.permission);
+
+const isSubagentTool = computed(() => props.name === 'Agent' || props.name === 'Task');
+
+const subagentTaskName = computed(() => {
+  if (!isSubagentTool.value) return '';
+  const description = String(props.input.description || '').trim();
+  if (description) return description;
+  const prompt = String(props.input.prompt || '').trim();
+  if (prompt) return prompt;
+  return '';
+});
 
 const toolLabel = computed(() => {
   switch (props.name) {
@@ -321,6 +340,7 @@ const toolLabel = computed(() => {
 const toolDescription = computed(() => {
   if (isAskUserQuestionTool.value) return '';
   if (isSkillTool.value) return skillSummary.value;
+  if (subagentTaskName.value) return subagentTaskName.value;
   if (grepSummary.value) return grepSummary.value;
   if (isFileTool.value) return relativePath.value || filePath.value;
   if (props.name === 'Glob') return globPattern.value;
@@ -333,6 +353,74 @@ const toolDescription = computed(() => {
     .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
     .join(' · ');
 });
+
+const inlineHeaderDescription = computed(() => {
+  if (isExitPlanModeTool.value) return '';
+  return toolDescription.value;
+});
+
+const taskRuntimeSummaryText = computed(() => {
+  if (!isSubagentTool.value || !props.taskRuntimeSummary) return '';
+
+  const statusLabel = props.taskRuntimeSummary.status === 'running'
+    ? '运行中'
+    : props.taskRuntimeSummary.status === 'error'
+      ? '已出错'
+      : '已完成';
+  const parts = [statusLabel];
+
+  if (props.taskRuntimeSummary.toolCallCount > 0) {
+    parts.push(`工具 ${props.taskRuntimeSummary.toolCallCount} 次`);
+  }
+
+  if (props.taskRuntimeSummary.latestPreview) {
+    parts.push(props.taskRuntimeSummary.latestPreview);
+  }
+
+  return parts.join(' · ');
+});
+
+const subagentRuntimeStatus = computed(() => {
+  if (!isSubagentTool.value) return '';
+  if (props.taskRuntimeSummary?.status === 'completed') return 'success';
+  if (props.taskRuntimeSummary?.status) return props.taskRuntimeSummary.status;
+  if (props.status === 'error' || props.isError) return 'error';
+  if (props.status === 'running') return 'running';
+  return 'success';
+});
+
+const subagentRuntimeLabel = computed(() => {
+  if (!isSubagentTool.value) return '';
+  const typeLabel = String(props.input.subagent_type || '').trim();
+  return typeLabel || props.name;
+});
+
+const subagentElapsedLabel = computed(() => {
+  if (!isSubagentTool.value) return '';
+
+  if (props.taskRuntimeSummary?.elapsedMs != null) {
+    return formatElapsed(props.taskRuntimeSummary.elapsedMs);
+  }
+
+  if (props.duration != null) {
+    return props.duration < 1000 ? `${props.duration}ms` : formatElapsed(props.duration);
+  }
+
+  return '';
+});
+
+const subagentPreview = computed(() => {
+  if (!isSubagentTool.value) return '';
+  return String(props.taskRuntimeSummary?.latestPreview || '').trim();
+});
+
+const subagentToolCountLabel = computed(() => {
+  if (!isSubagentTool.value) return '';
+  const count = props.taskRuntimeSummary?.toolCallCount ?? 0;
+  return count > 0 ? `${count} 次工具调用` : '';
+});
+
+const showTaskRuntimeSummaryLine = computed(() => !isSubagentTool.value && !!taskRuntimeSummaryText.value);
 
 const iconKind = computed(() => {
   switch (props.name) {
@@ -364,14 +452,30 @@ async function handleCopyDescription() {
   }
 }
 
+watch(() => props.initialExpanded, (value) => {
+  expanded.value = value;
+});
+
+function toggleExpanded() {
+  const next = !expanded.value;
+  expanded.value = next;
+  emit('expandedChange', next);
+}
+
 </script>
 
 <template>
-  <div class="message-block tool-call-block" :class="`corner-${cornerStyle}`">
+  <div class="message-block tool-call-block" :class="[`corner-${cornerStyle}`, { embedded }]">
     <!-- 头部 -->
-    <div class="message-block-header tool-header" :class="{ clickable: canExpand }" @click="canExpand ? expanded = !expanded : null">
-      <span class="tool-icon" :class="[`icon-${iconKind}`]">
-        <svg v-if="iconKind === 'file'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <div class="message-block-header tool-header" :class="{ clickable: canExpand, embedded }" @click="canExpand ? toggleExpanded() : null">
+      <span class="tool-icon" :class="[`icon-${iconKind}`, { 'subagent-tool-icon': isSubagentTool }]">
+        <template v-if="isSubagentTool">
+          <span class="subagent-status-indicator" :class="`status-${subagentRuntimeStatus}`">
+            <span v-if="subagentRuntimeStatus === 'running'" class="subagent-spinner" aria-hidden="true"></span>
+            <span v-else class="subagent-dot" aria-hidden="true"></span>
+          </span>
+        </template>
+        <svg v-else-if="iconKind === 'file'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
         </svg>
@@ -401,16 +505,39 @@ async function handleCopyDescription() {
       </span>
 
       <div class="message-block-main command-text unified-row">
-        <span class="message-block-title tool-title" :class="{ error: isError }">{{ toolLabel }}</span>
-        <span
-          v-if="toolDescription"
-          class="message-block-description tool-description"
-          :class="{ error: isError }"
-          :title="toolDescription"
-        >{{ toolDescription }}</span>
+        <div class="tool-text-stack">
+          <div v-if="isSubagentTool" class="subagent-header-row" :title="taskRuntimeSummaryText || toolDescription">
+            <span class="message-block-title tool-title subagent-runtime-label" :class="{ error: isError }">{{ subagentRuntimeLabel }}</span>
+            <span v-if="subagentElapsedLabel" class="subagent-meta">{{ subagentElapsedLabel }}</span>
+            <span v-if="subagentToolCountLabel" class="subagent-meta">{{ subagentToolCountLabel }}</span>
+            <span v-if="subagentPreview" class="subagent-meta subagent-preview">{{ subagentPreview }}</span>
+            <span
+              v-if="toolDescription"
+              class="message-block-description tool-description subagent-task-name"
+              :class="{ error: isError }"
+              :title="toolDescription"
+            >{{ toolDescription }}</span>
+          </div>
+          <div v-else class="tool-primary-row">
+            <span class="message-block-title tool-title" :class="{ error: isError }">{{ toolLabel }}</span>
+            <span
+              v-if="inlineHeaderDescription"
+              class="message-block-description tool-description"
+              :class="{ error: isError }"
+              :title="inlineHeaderDescription"
+            >{{ inlineHeaderDescription }}</span>
+          </div>
+          <div
+            v-if="showTaskRuntimeSummaryLine"
+            class="task-runtime-summary"
+            :title="taskRuntimeSummaryText"
+          >
+            {{ taskRuntimeSummaryText }}
+          </div>
+        </div>
       </div>
 
-      <div class="tool-header-actions">
+      <div class="tool-header-actions" :class="{ embedded }">
         <button
           v-if="toolDescription"
           :class="['tool-copy-button', { copied }]"
@@ -430,14 +557,14 @@ async function handleCopyDescription() {
 
         <!-- 右侧状态 -->
         <div class="message-block-status status-right">
-          <span v-if="duration !== undefined" class="duration">{{ duration < 1000 ? `${duration}ms` : `${(duration / 1000).toFixed(1)}s` }}</span>
+          <span v-if="!isSubagentTool && duration !== undefined" class="duration">{{ duration < 1000 ? `${duration}ms` : `${(duration / 1000).toFixed(1)}s` }}</span>
           <!-- 成功/失败图标 -->
-          <span v-if="status === 'success' && !isError" class="status-check" title="成功">
+          <span v-if="!isSubagentTool && status === 'success' && !isError" class="status-check" title="成功">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="20 6 9 17 4 12"/>
             </svg>
           </span>
-          <span v-else-if="status === 'error' || isError" class="status-error" title="失败">
+          <span v-else-if="!isSubagentTool && (status === 'error' || isError)" class="status-error" title="失败">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <line x1="18" y1="6" x2="6" y2="18"/>
               <line x1="6" y1="6" x2="18" y2="18"/>
@@ -455,7 +582,17 @@ async function handleCopyDescription() {
     </div>
 
     <!-- 展开内容：执行结果 -->
-    <div v-if="expanded && canExpand" class="message-block-content tool-result">
+    <div v-if="expanded && canExpand" class="message-block-content tool-result" :class="{ embedded }">
+      <slot name="before-result" />
+
+      <div
+        v-if="isExitPlanModeTool && toolDescription"
+        class="expanded-tool-description"
+        :title="toolDescription"
+      >
+        {{ toolDescription }}
+      </div>
+
       <!-- 工具执行结果 -->
       <ToolDiffView
         :tool-name="name"
@@ -558,6 +695,13 @@ async function handleCopyDescription() {
   box-shadow: none;
 }
 
+.message-block.embedded {
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  overflow: visible;
+}
+
 .message-block.corner-none {
   border-radius: 0;
 }
@@ -598,6 +742,17 @@ async function handleCopyDescription() {
   background-color: rgba(148, 163, 184, 0.08);
 }
 
+.tool-header.embedded {
+  padding: 0.22rem 0.2rem 0.22rem 0.35rem;
+  background: var(--bg-secondary, #f9fafb);
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+}
+
+.tool-header.embedded.clickable:hover {
+  background-color: var(--bg-tertiary, #f3f4f6);
+}
+
 .tool-icon {
   display: flex;
   align-items: center;
@@ -615,18 +770,135 @@ async function handleCopyDescription() {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  min-height: 1.25rem;
+  min-height: 1rem;
 }
 
 .command-text.unified-row {
   flex-direction: row;
 }
 
+.tool-text-stack {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0;
+}
+
+.tool-primary-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.subagent-tool-icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.subagent-status-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  color: var(--text-muted, #9ca3af);
+}
+
+.subagent-status-indicator.status-running {
+  color: var(--primary-color, #3b82f6);
+}
+
+.subagent-status-indicator.status-success {
+  color: #16a34a;
+}
+
+.subagent-status-indicator.status-error {
+  color: #dc2626;
+}
+
+.subagent-spinner {
+  width: 0.78rem;
+  height: 0.78rem;
+  border-radius: 9999px;
+  border: 1.8px solid rgba(148, 163, 184, 0.26);
+  border-top-color: currentColor;
+  animation: subagentSpin 0.9s linear infinite;
+  box-sizing: border-box;
+}
+
+.subagent-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 9999px;
+  background: currentColor;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.14);
+}
+
+@keyframes subagentSpin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.subagent-header-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  row-gap: 0.1rem;
+  flex-wrap: wrap;
+  line-height: 1.35;
+}
+
+.subagent-runtime-label {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.subagent-meta {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted, #9ca3af);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.subagent-preview {
+  max-width: min(18rem, 48%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subagent-task-name {
+  flex: 1 1 16rem;
+  min-width: min(100%, 14rem);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .tool-header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
+}
+
+.tool-header-actions.embedded {
+  gap: 6px;
 }
 
 .message-block-title,
@@ -646,7 +918,7 @@ async function handleCopyDescription() {
   min-width: 0;
   color: var(--text-secondary, #6b7280);
   font-family: 'Monaco', 'Menlo', monospace;
-  font-size: 12.5px;
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -656,15 +928,47 @@ async function handleCopyDescription() {
   color: #dc2626;
 }
 
+.task-runtime-summary {
+  min-width: 0;
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tool-result {
   border-top: 1px solid var(--border-color, #e5e7eb);
   background: var(--bg-tertiary, #f3f4f6);
+}
+
+.tool-result.embedded {
+  margin-top: 0.15rem;
+  margin-left: 1.45rem;
+  border-top: none;
+  border-radius: 12px;
+  background: var(--bg-secondary, #f9fafb);
+  overflow: hidden;
+}
+
+.expanded-tool-description {
+  padding: 0.7rem 0.9rem 0.35rem;
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @media (prefers-color-scheme: dark) {
   .message-block {
     background: var(--bg-secondary, #1f2937);
     border-color: var(--border-color, #374151);
+  }
+
+  .message-block.embedded {
+    background: transparent;
+    border-color: transparent;
   }
 
   .tool-header {
@@ -675,8 +979,28 @@ async function handleCopyDescription() {
     background-color: rgba(75, 85, 99, 0.16);
   }
 
+  .tool-header.embedded.clickable:hover {
+    background-color: var(--bg-tertiary, #374151);
+  }
+
   .tool-icon {
     color: var(--text-secondary, #9ca3af);
+  }
+
+  .subagent-status-indicator {
+    color: var(--text-muted, #6b7280);
+  }
+
+  .subagent-status-indicator.status-running {
+    color: var(--primary-color, #60a5fa);
+  }
+
+  .subagent-status-indicator.status-success {
+    color: #4ade80;
+  }
+
+  .subagent-status-indicator.status-error {
+    color: #f87171;
   }
 
   .tool-title {
@@ -687,9 +1011,30 @@ async function handleCopyDescription() {
     color: var(--text-secondary, #9ca3af);
   }
 
+  .task-runtime-summary {
+    color: var(--text-secondary, #9ca3af);
+  }
+
+  .subagent-meta {
+    color: var(--text-muted, #94a3b8);
+  }
+
+  .tool-header.embedded {
+    background: var(--bg-secondary, #1f2937);
+    border-color: var(--border-color, #374151);
+  }
+
   .tool-result {
     background: var(--bg-tertiary, #374151);
     border-top-color: var(--border-color, #374151);
+  }
+
+  .tool-result.embedded {
+    background: var(--bg-tertiary, #374151);
+  }
+
+  .expanded-tool-description {
+    color: var(--text-secondary, #9ca3af);
   }
 }
 
@@ -706,11 +1051,11 @@ async function handleCopyDescription() {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 1.6rem;
-  height: 1.6rem;
+  width: 1.1rem;
+  height: 1.1rem;
   padding: 0;
   border: none;
-  border-radius: 0.4rem;
+  border-radius: 0.3rem;
   background: transparent;
   color: var(--text-muted, #9ca3af);
   opacity: 0;
@@ -737,7 +1082,7 @@ async function handleCopyDescription() {
 }
 
 .duration {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted, #9ca3af);
 }
 
