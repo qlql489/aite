@@ -39,36 +39,36 @@ Aite addresses the friction of using Claude Code purely in the terminal: switchi
     <td align="center" width="50%">
       <img src="img/main.png" alt="Main interface" />
       <br />
-      <sub>Main interface</sub>
+      <b style="font-size: 16px;">Main interface</b>
     </td>
     <td align="center" width="50%">
       <img src="img/diff.png" alt="Tool calls and diff view" />
       <br />
-      <sub>Tool calls and diff view</sub>
+      <b style="font-size: 16px;">Tool calls and diff view</b>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
       <img src="img/permission.png" alt="Permission review" />
       <br />
-      <sub>Permission review</sub>
+      <b style="font-size: 16px;">Permission review</b>
     </td>
     <td align="center" width="50%">
       <img src="img/skill.png" alt="Skill management" />
       <br />
-      <sub>Skill management</sub>
+      <b style="font-size: 16px;">Skill management</b>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
       <img src="img/mcp.png" alt="MCP management" />
       <br />
-      <sub>MCP management</sub>
+      <b style="font-size: 16px;">MCP management</b>
     </td>
     <td align="center" width="50%">
       <img src="img/provider.png" alt="Anthropic and OpenAI provider management" />
       <br />
-      <sub>Anthropic and OpenAI provider management</sub>
+      <b style="font-size: 16px;">Anthropic and OpenAI provider management</b>
     </td>
   </tr>
 </table>
