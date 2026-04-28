@@ -9,6 +9,7 @@
     "dev:node": "tsx watch node-backend/src/index.ts",
     "dev:frontend": "vite",
     "dev:tauri": "tauri dev",
+    "tauri": "tauri",
     "docs:dev": "npx vitepress dev docs",
     "docs:build": "npx vitepress build docs",
     "docs:preview": "npx vitepress preview docs",
