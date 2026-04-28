@@ -170,6 +170,10 @@ Aite 本身是桌面客户端，推荐直接通过图形界面管理会话与项
 <a id="更多文档"></a>
 ## 更多文档
 
+- 文档目录：[`docs/`](docs)
+- 本地预览：`npm run docs:dev`
+- GitHub Pages：<https://qlql489.github.io/aite/>
+
 
 ### 作者
 

@@ -186,6 +186,9 @@ const filteredSkillTree = computed(() => {
 const mcpServers = computed(() => mcpStore.serverList);
 const mcpSourceScope = computed(() => mcpStore.sourceScope);
 const mcpTogglingIds = ref<Set<string>>(new Set());
+const commandRefreshing = ref(false);
+const skillRefreshing = ref(false);
+const mcpRefreshing = ref(false);
 
 // Plugin 列表（模拟数据）
 const plugins = ref([
@@ -337,6 +340,94 @@ async function loadExtensions() {
     console.error('[Extensions] Failed to load extensions:', e);
   } finally {
     extensionsLoading.value = false;
+  }
+}
+
+function clearSelectedCommandState() {
+  selectedCommand.value = null;
+  commandContent.value = '';
+  commandLoading.value = false;
+  commandSaved.value = false;
+}
+
+function clearSelectedSkillState() {
+  selectedSkill.value = null;
+  skillContent.value = '';
+  skillLoading.value = false;
+  skillSaved.value = false;
+  skillTreeData.value = null;
+  skillTreeError.value = '';
+  selectedSkillTreeFile.value = '';
+  selectedSkillRootPath.value = '';
+  skillFileSize.value = 0;
+}
+
+async function refreshCommandConfig() {
+  if (commandRefreshing.value) return;
+
+  commandRefreshing.value = true;
+  const selectedPath = selectedCommand.value?.filePath;
+
+  try {
+    await loadExtensions();
+
+    if (!selectedPath) {
+      return;
+    }
+
+    const refreshed = commandFiles.value.find((command) => command.filePath === selectedPath);
+    if (refreshed) {
+      await selectCommand(refreshed);
+    } else {
+      clearSelectedCommandState();
+    }
+  } finally {
+    commandRefreshing.value = false;
+  }
+}
+
+async function refreshSkillConfig() {
+  if (skillRefreshing.value) return;
+
+  skillRefreshing.value = true;
+  const selectedPath = selectedSkill.value?.filePath;
+  const selectedTreeFile = selectedSkillTreeFile.value;
+
+  try {
+    await loadExtensions();
+
+    if (!selectedPath) {
+      return;
+    }
+
+    const refreshed = skillFiles.value.find((skill) => skill.filePath === selectedPath);
+    if (!refreshed) {
+      clearSelectedSkillState();
+      return;
+    }
+
+    selectedSkill.value = refreshed;
+    skillTreeQuery.value = '';
+    await loadSkillTree(refreshed);
+
+    const nextFile = selectedTreeFile || getFilename(refreshed.filePath);
+    await openSkillTreeFile(nextFile);
+    skillViewMode.value = 'edit';
+    skillSaved.value = false;
+  } finally {
+    skillRefreshing.value = false;
+  }
+}
+
+async function refreshMcpConfig() {
+  if (mcpRefreshing.value) return;
+
+  mcpRefreshing.value = true;
+  try {
+    await mcpStore.loadServers(workspacePath.value, { force: true });
+    initMcpJsonConfig();
+  } finally {
+    mcpRefreshing.value = false;
   }
 }
 
@@ -1194,10 +1285,21 @@ onBeforeUnmount(() => {
             <h3 class="command-title">Commands</h3>
             <span class="command-count">{{ commands.length }} {{ isWorkspaceMode ? '个工作区命令' : 'commands' }}</span>
           </div>
-          <button class="btn-primary btn-sm" @click="showCommandCreate = true">
-            <HugeiconsIcon :icon="PlusSignIcon" class="btn-icon-sm" />
-            新建命令
-          </button>
+          <div class="panel-actions">
+            <button
+              type="button"
+              class="btn-secondary btn-sm btn-icon-only"
+              :disabled="commandRefreshing"
+              title="刷新命令配置"
+              @click="refreshCommandConfig"
+            >
+              <HugeiconsIcon :icon="RefreshIcon" :class="['btn-icon-sm', { 'animate-spin': commandRefreshing }]" />
+            </button>
+            <button class="btn-primary btn-sm" @click="showCommandCreate = true">
+              <HugeiconsIcon :icon="PlusSignIcon" class="btn-icon-sm" />
+              新建命令
+            </button>
+          </div>
         </div>
 
         <!-- Main content -->
@@ -1451,11 +1553,24 @@ onBeforeUnmount(() => {
 
         <!-- Header -->
         <div class="skill-header-bar">
-          <h3 class="skill-title">Skills</h3>
-          <button class="btn-primary btn-sm" @click="openSkillCreateDialog">
-            <HugeiconsIcon :icon="PlusSignIcon" class="btn-icon-sm" />
-            New Skill
-          </button>
+          <div class="panel-header-left">
+            <h3 class="skill-title">Skills</h3>
+          </div>
+          <div class="panel-actions">
+            <button
+              type="button"
+              class="btn-secondary btn-sm btn-icon-only"
+              :disabled="skillRefreshing"
+              title="刷新技能配置"
+              @click="refreshSkillConfig"
+            >
+              <HugeiconsIcon :icon="RefreshIcon" :class="['btn-icon-sm', { 'animate-spin': skillRefreshing }]" />
+            </button>
+            <button class="btn-primary btn-sm" @click="openSkillCreateDialog">
+              <HugeiconsIcon :icon="PlusSignIcon" class="btn-icon-sm" />
+              New Skill
+            </button>
+          </div>
         </div>
 
         <!-- Main content: left list + right editor -->
@@ -1755,6 +1870,15 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="panel-actions">
+            <button
+              type="button"
+              class="btn-secondary btn-sm btn-icon-only"
+              :disabled="mcpRefreshing"
+              title="刷新 MCP 配置"
+              @click="refreshMcpConfig"
+            >
+              <HugeiconsIcon :icon="RefreshIcon" :class="['btn-icon-sm', { 'animate-spin': mcpRefreshing }]" />
+            </button>
             <button class="btn-primary btn-with-icon" @click="addMcpServer">
               <HugeiconsIcon :icon="PlusSignIcon" class="btn-icon" />
               新建
@@ -2254,6 +2378,14 @@ onBeforeUnmount(() => {
 
 .btn-secondary:hover {
   background-color: var(--bg-secondary, #f9fafb);
+}
+
+.btn-icon-only {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  padding: 0.5rem;
 }
 
 .btn-toggle {

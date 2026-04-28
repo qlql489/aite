@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build:node && npm run build:frontend",
+    "beforeBuildCommand": "npm run build:cli",
     "frontendDist": "../dist"
   },
   "app": {
@@ -43,7 +43,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERFMkFFQkY4OTZENTc2NTYKUldSV2R0V1crT3NxM3VQdFJCMmlmOURGTW1WZWlMQk9YeWVFV3VxQVB2WnJtWXRpVUxWTGxobU4K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdGRjA4QkQwNkMxRkU3OEMKUldTTTV4OXMwSXZ3ZjFTNlpBQkhGMXJSWWYvVllZVEprR0tvQUVVMmhRVnVyaXplNG1wa0xLUkYK",
       "endpoints": [
         "https://github.com/qlql489/aite/releases/latest/download/latest.json"
       ]
