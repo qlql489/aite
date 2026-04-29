@@ -87,6 +87,15 @@ For macOS:
 Download the `.dmg` file from [Releases](https://github.com/qlql489/aite/releases) and install it by double-clicking.
 Both Apple Silicon (`arm64`) and Intel (`x86_64`) are supported.
 
+If macOS shows “developer cannot be verified” or says Apple cannot check the app for malicious software:
+
+1. Try opening the app once so macOS shows the warning.
+2. Open `System Settings` -> `Privacy & Security`.
+3. Scroll to the `Security` section and click `Open Anyway`.
+4. Enter your login password, then open Aite again.
+
+The `Open Anyway` button is usually available for about one hour after the first blocked launch.
+
 For Windows:
 
 Download the `.msi` installer from [Releases](https://github.com/qlql489/aite/releases) and run it.

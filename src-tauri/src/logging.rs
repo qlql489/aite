@@ -20,8 +20,8 @@ pub fn is_debug_logging_enabled() -> bool {
     match fs::read_to_string(config_path) {
         Ok(content) if !content.trim().is_empty() => serde_json::from_str::<AppConfig>(&content)
             .map(|config| config.debug_enabled)
-            .unwrap_or(true),
-        _ => true,
+            .unwrap_or(false),
+        _ => false,
     }
 }
 

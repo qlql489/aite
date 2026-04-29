@@ -439,7 +439,7 @@ fn default_inherit_system_config() -> bool {
 }
 
 fn default_debug_enabled() -> bool {
-    true
+    false
 }
 
 fn default_theme_color() -> String {

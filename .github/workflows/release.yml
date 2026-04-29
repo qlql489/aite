@@ -182,13 +182,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ env.APPLE_ID }}
-          APPLE_PASSWORD: ${{ env.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ env.APPLE_TEAM_ID }}
-          APPLE_API_KEY: ${{ env.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ env.APPLE_API_ISSUER }}
-          APPLE_API_KEY_PATH: ${{ env.APPLE_API_KEY_PATH }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_TEAM_ID || '' }}
+          APPLE_API_KEY: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_API_KEY != '' && env.APPLE_API_ISSUER != '' && env.APPLE_API_PRIVATE_KEY != '' && env.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_API_KEY != '' && env.APPLE_API_ISSUER != '' && env.APPLE_API_PRIVATE_KEY != '' && env.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY_PATH: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_API_KEY != '' && env.APPLE_API_ISSUER != '' && env.APPLE_API_PRIVATE_KEY != '' && env.APPLE_API_KEY_PATH || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Aite ${{ github.ref_name }}

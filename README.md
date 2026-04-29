@@ -83,6 +83,15 @@ macos系统
 从 [Releases](https://github.com/qlql489/aite/releases) 下载`.dmg`文件，双击安装
 同时支持 Apple Silicon (arm64) 和 Intel (x86_64)
 
+如果 macOS 提示“无法验证开发者”或“Apple 无法检查此 App 是否包含恶意软件”，可以按下面步骤放行：
+
+1. 先尝试双击打开一次，让系统弹出拦截提示
+2. 打开“系统设置” -> “隐私与安全性”
+3. 滚动到“安全性”区域，点击“仍要打开”
+4. 输入登录密码确认后，再次打开 Aite
+
+`仍要打开` 按钮通常只会在你第一次被拦截后的约 1 小时内出现。
+
 window系统
 从 [Releases](https://github.com/qlql489/aite/releases) 下载`.msi` 安装包运行
 
