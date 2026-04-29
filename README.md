@@ -41,7 +41,7 @@ Aite 是一个围绕 Claude Code 日常使用体验打造的桌面客户端。
       <b style="font-size: 16px;">主界面</b>
     </td>
     <td align="center" width="50%">
-      <img src="img/diff.png" alt="工具调用&diff" />
+      <img src="img/codediff.png" alt="工具调用&diff" />
       <br />
       <b style="font-size: 16px;">工具调用&diff</b>
     </td>

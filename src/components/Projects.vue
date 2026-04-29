@@ -142,7 +142,7 @@ const resolveConversationProvider = (conversation?: Partial<Conversation> | null
 };
 
 const getConversationPermissionMode = (conversation?: Partial<Conversation> | null): PermissionMode => {
-  return conversation?.permissionMode || 'default';
+  return conversation?.permissionMode || claudeStore.defaultPermissionMode;
 };
 
 const normalizeTokenUsage = (usage: any): TokenUsage | undefined => {
@@ -1198,7 +1198,9 @@ const refreshProjectSessions = async (projectId: number) => {
         messageCount: session.messageCount || 0,
         size: formatFileSize(session.fileSize || 0),
         projectId: projectId,
-        permissionMode: existingIndex >= 0 ? conversations.value[existingIndex].permissionMode || 'default' : 'default',
+        permissionMode: existingIndex >= 0
+          ? conversations.value[existingIndex].permissionMode || claudeStore.defaultPermissionMode
+          : claudeStore.defaultPermissionMode,
         providerId: null,
         model: null,
         providerOverrideEnabled: false,
@@ -1325,7 +1327,7 @@ const startNewConversation = async (projectId: number) => {
     messageCount: 0,
     size: '0 B',
     projectId: project.id,
-    permissionMode: 'default',
+    permissionMode: claudeStore.defaultPermissionMode,
     providerId: providerStore.activeProviderId,
     model: providerStore.getPrimaryModel(providerStore.activeProviderId),
     providerOverrideEnabled: false,
@@ -3528,7 +3530,7 @@ watch(
 
 // 权限模式状态
 const permissionMode = computed<PermissionMode>(() => {
-  return claudeStore.currentSession?.permissionMode || selectedConversation.value?.permissionMode || 'default';
+  return claudeStore.currentSession?.permissionMode || selectedConversation.value?.permissionMode || claudeStore.defaultPermissionMode;
 });
 const isPlanMode = computed(() => permissionMode.value === 'plan');
 

@@ -14,6 +14,13 @@ import Stats from './Stats.vue';
 import Extensions from './Extensions.vue';
 import ProviderTab from './ProviderTab.vue';
 import { useUpdaterStore } from '../stores/updater';
+import { useClaudeStore } from '../stores/claude';
+import {
+  PERMISSION_MODES,
+  getPermissionModeDescription,
+  getPermissionModeDisplayName,
+} from '../utils/permissionMode';
+import type { PermissionMode } from '../types';
 import {
   applyChatFontSize,
   applyInterfaceFontSize,
@@ -53,6 +60,7 @@ const userAgent = navigator.userAgent.toLowerCase();
 const isWindows = userAgent.includes('windows');
 const isMac = userAgent.includes('macintosh') || userAgent.includes('mac os');
 const updaterStore = useUpdaterStore();
+const claudeStore = useClaudeStore();
 const {
   isEnabled: autoUpdateEnabled,
   disabledReason: autoUpdateDisabledReason,
@@ -64,6 +72,7 @@ const {
   errorMessage: updateErrorMessage,
   actionLabel: updateActionLabel,
 } = storeToRefs(updaterStore);
+const { defaultPermissionMode } = storeToRefs(claudeStore);
 
 const chatFontSizeDescription = computed(() => {
   if (isWindows) {
@@ -227,6 +236,10 @@ async function updateChatFontSize(size: number) {
   } catch (error) {
     console.error('保存对话字号失败:', error);
   }
+}
+
+function updateDefaultPermissionMode(mode: PermissionMode) {
+  claudeStore.setDefaultPermissionMode(mode);
 }
 
 const isUpdateBusy = computed(() =>
@@ -405,6 +418,27 @@ const emit = defineEmits<{
                   +
                 </button>
               </div>
+            </div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <label class="setting-label">默认权限模式</label>
+                <span class="setting-description">
+                  新建会话时默认使用的权限模式。当前为“{{ getPermissionModeDisplayName(defaultPermissionMode) }}”。
+                </span>
+              </div>
+              <select
+                class="setting-select"
+                :value="defaultPermissionMode"
+                @change="(e) => updateDefaultPermissionMode((e.target as HTMLSelectElement).value as PermissionMode)"
+              >
+                <option
+                  v-for="mode in PERMISSION_MODES"
+                  :key="mode"
+                  :value="mode"
+                >
+                  {{ getPermissionModeDisplayName(mode) }} - {{ getPermissionModeDescription(mode) }}
+                </option>
+              </select>
             </div>
             <div class="setting-item">
               <div class="setting-info">

@@ -134,7 +134,7 @@ const THINKING_LEVELS: Array<{ id: ThinkingLevel; label: string }> = [
 
 // 当前权限模式
 const currentPermissionMode = computed(() => {
-  return claudeStore.currentSession?.permissionMode || 'default';
+  return claudeStore.currentSession?.permissionMode || claudeStore.defaultPermissionMode;
 });
 
 const currentProjectRoot = computed(() => {

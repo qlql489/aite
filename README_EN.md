@@ -42,7 +42,7 @@ With a desktop-native experience for multi-project management, fluid history bro
       <b style="font-size: 16px;">Main interface</b>
     </td>
     <td align="center" width="50%">
-      <img src="img/diff.png" alt="Tool calls and diff view" />
+      <img src="img/codediff.png" alt="Tool calls and diff view" />
       <br />
       <b style="font-size: 16px;">Tool calls and diff view</b>
     </td>

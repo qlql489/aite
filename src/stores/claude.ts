@@ -87,6 +87,7 @@ export const useClaudeStore = defineStore('claude', () => {
   const taskPanelOpen = ref<boolean>(false);
   const showThinking = ref<boolean>(true); // 是否显示思考内容
   const thinkingLevel = ref<ThinkingLevel>('medium');
+  const defaultPermissionMode = ref<PermissionMode>('default');
   const streamingEnabled = ref<boolean>(true); // 流式输出固定开启
 
   // ========== 任务完成通知状态 ==========
@@ -164,7 +165,7 @@ export const useClaudeStore = defineStore('claude', () => {
    * 当前权限模式
    */
   const currentPermissionMode = computed(() => {
-    return currentSession.value?.permissionMode || 'default';
+    return currentSession.value?.permissionMode || defaultPermissionMode.value;
   });
 
   /**
@@ -1036,6 +1037,14 @@ export const useClaudeStore = defineStore('claude', () => {
   }
 
   /**
+   * 设置默认权限模式
+   */
+  function setDefaultPermissionMode(mode: PermissionMode): void {
+    defaultPermissionMode.value = mode;
+    localStorage.setItem('cc-default-permission-mode', mode);
+  }
+
+  /**
    * 设置是否启用流式输出
    */
   function setStreamingEnabled(_enabled: boolean): void {
@@ -1202,6 +1211,25 @@ export const useClaudeStore = defineStore('claude', () => {
   }
 
   /**
+   * 从 localStorage 加载默认权限模式设置
+   */
+  function loadDefaultPermissionMode(): void {
+    try {
+      const stored = localStorage.getItem('cc-default-permission-mode');
+      if (
+        stored === 'default'
+        || stored === 'acceptEdits'
+        || stored === 'bypassPermissions'
+        || stored === 'plan'
+      ) {
+        defaultPermissionMode.value = stored;
+      }
+    } catch (e) {
+      console.error('Failed to load default permission mode:', e);
+    }
+  }
+
+  /**
    * 从 localStorage 加载流式输出设置
    */
   function loadStreamingEnabled(): void {
@@ -1249,7 +1277,7 @@ export const useClaudeStore = defineStore('claude', () => {
     const pendingSession: SessionState = {
       sessionId,
       cwd: projectPath,
-      permissionMode: overrides?.permissionMode ?? 'default',
+      permissionMode: overrides?.permissionMode ?? defaultPermissionMode.value,
       thinkingLevel: overrides?.thinkingLevel ?? thinkingLevel.value,
       providerId: overrides?.providerId ?? null,
       model: overrides?.model ?? null,
@@ -1477,6 +1505,7 @@ export const useClaudeStore = defineStore('claude', () => {
   loadDarkMode();
   loadShowThinking();
   loadThinkingLevel();
+  loadDefaultPermissionMode();
   loadStreamingEnabled();
   loadCurrentSession();
 
@@ -1504,6 +1533,7 @@ export const useClaudeStore = defineStore('claude', () => {
     taskPanelOpen,
     showThinking,
     thinkingLevel,
+    defaultPermissionMode,
     streamingEnabled,
     unreadTaskCompletions,
     unreadMessageCompletions,
@@ -1577,6 +1607,7 @@ export const useClaudeStore = defineStore('claude', () => {
     setShowThinking,
     toggleShowThinking,
     setThinkingLevel,
+    setDefaultPermissionMode,
     setStreamingEnabled,
     toggleStreamingEnabled,
 
