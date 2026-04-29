@@ -404,7 +404,7 @@ async fn verify_http_server_status(name: String, url: String) -> McpServerStatus
             "capabilities": {},
             "clientInfo": {
                 "name": "aite",
-                "version": "0.1.0"
+                "version": "0.1.1"
             }
         }
     });
@@ -522,7 +522,7 @@ async fn verify_stdio_server_status(
             "capabilities": {},
             "clientInfo": {
                 "name": "aite",
-                "version": "0.1.0"
+                "version": "0.1.1"
             }
         }
     })

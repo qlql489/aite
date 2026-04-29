@@ -122,6 +122,8 @@ const showPermissionMenu = ref(false);
 const permissionMenuRef = ref<HTMLElement | null>(null);
 const showThinkingMenu = ref(false);
 const thinkingMenuRef = ref<HTMLElement | null>(null);
+const showProviderMenu = ref(false);
+const providerMenuRef = ref<HTMLElement | null>(null);
 const isRestartingThinking = ref(false);
 const isRestartingProvider = ref(false);
 
@@ -232,6 +234,12 @@ const currentProviderModelValue = computed(() => {
   return `${provider.id}::${model}`;
 });
 
+const currentProviderModelLabel = computed(() => {
+  if (isRestartingProvider.value) return '重启中...';
+  const currentOption = providerModelOptions.value.find((option) => option.key === currentProviderModelValue.value);
+  return currentOption?.label || '选择供应商 - 模型';
+});
+
 
 const isEditorEmpty = computed(() => !editorText.value.trim());
 const sendButtonDisabled = computed(() => {
@@ -299,6 +307,7 @@ const toggleThinkingMenu = () => {
   showThinkingMenu.value = !showThinkingMenu.value;
   if (showThinkingMenu.value) {
     showPermissionMenu.value = false;
+    showProviderMenu.value = false;
   }
 };
 
@@ -336,9 +345,24 @@ const setThinkingLevel = async (level: ThinkingLevel, event?: Event) => {
   }
 };
 
+const toggleProviderMenu = () => {
+  if (props.disabled || props.streaming || isRestartingProvider.value) return;
+
+  showProviderMenu.value = !showProviderMenu.value;
+  if (showProviderMenu.value) {
+    showPermissionMenu.value = false;
+    showThinkingMenu.value = false;
+  }
+};
+
 const setSessionProviderModel = async (selectionKey: string | null) => {
   const session = claudeStore.currentSession;
   if (!session?.sessionId || !selectionKey || isRestartingProvider.value) return;
+  showProviderMenu.value = false;
+
+  if (selectionKey === currentProviderModelValue.value) {
+    return;
+  }
 
   const selectedOption = providerModelOptions.value.find((option) => option.key === selectionKey);
   if (!selectedOption) return;
@@ -363,6 +387,10 @@ const setSessionProviderModel = async (selectionKey: string | null) => {
 // 切换权限模式菜单显示
 const togglePermissionMenu = () => {
   showPermissionMenu.value = !showPermissionMenu.value;
+  if (showPermissionMenu.value) {
+    showThinkingMenu.value = false;
+    showProviderMenu.value = false;
+  }
 };
 
 // 循环切换权限模式
@@ -2170,6 +2198,12 @@ const handleClickOutside = (e: MouseEvent) => {
     }
   }
 
+  if (showProviderMenu.value && providerMenuRef.value) {
+    if (target && !providerMenuRef.value.contains(target)) {
+      showProviderMenu.value = false;
+    }
+  }
+
   if (showFileMenu.value && fileMenuRef.value) {
     if (target && !fileMenuRef.value.contains(target) && target !== editorRef.value && !editorRef.value?.contains(target)) {
       closeFileMenu(false);
@@ -2184,6 +2218,11 @@ const handleClickOutside = (e: MouseEvent) => {
 };
 
 const handleDocumentKeyDown = (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && showProviderMenu.value) {
+    showProviderMenu.value = false;
+    return;
+  }
+
   if (e.key === 'Escape' && showAttachmentMenu.value) {
     showAttachmentMenu.value = false;
     return;
@@ -2401,32 +2440,45 @@ onUnmounted(() => {
           </div>
 
           <div class="toolbar-cluster session-config-selectors">
-            <label class="session-select-shell">
-              <span class="session-select-icon" aria-hidden="true">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="3" y="6" width="7" height="5" rx="1.5"/>
-                  <rect x="14" y="13" width="7" height="5" rx="1.5"/>
-                  <path d="M10 8.5h2a2 2 0 0 1 2 2v2.5"/>
-                  <path d="M14 15.5h-2a2 2 0 0 1-2-2V11"/>
-                </svg>
-              </span>
-              <select
-                class="session-select permission-like-select"
-                :value="currentProviderModelValue"
-                :style="{ width: providerModelSelectWidth }"
-                :disabled="disabled || isRestartingProvider"
-                @change="setSessionProviderModel(($event.target as HTMLSelectElement).value || null)"
+            <div class="thinking-level-selector provider-model-selector" ref="providerMenuRef" @mousedown.stop>
+              <button
+                class="thinking-level-btn"
+                :class="{ active: showProviderMenu, restarting: isRestartingProvider }"
+                :disabled="disabled || streaming || isRestartingProvider"
+                :title="currentProviderModelLabel"
+                @click.stop.prevent="toggleProviderMenu"
               >
-                <option value="" disabled>选择供应商 - 模型</option>
-                <option
+                <span class="pill-accent thinking-accent" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="6" width="7" height="5" rx="1.5"/>
+                    <rect x="14" y="13" width="7" height="5" rx="1.5"/>
+                    <path d="M10 8.5h2a2 2 0 0 1 2 2v2.5"/>
+                    <path d="M14 15.5h-2a2 2 0 0 1-2-2V11"/>
+                  </svg>
+                </span>
+                <span class="thinking-level-label fixed-width-text provider-model-text" :style="{ width: providerModelSelectWidth }">{{ currentProviderModelLabel }}</span>
+                <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                  <path d="M2 4l4 4 4-4"/>
+                </svg>
+              </button>
+
+              <div v-if="showProviderMenu" class="thinking-level-menu provider-model-menu">
+                <div
                   v-for="option in providerModelOptions"
                   :key="option.key"
-                  :value="option.key"
+                  class="thinking-level-option"
+                  :class="{ active: option.key === currentProviderModelValue }"
+                  @click.stop="setSessionProviderModel(option.key)"
                 >
-                  {{ option.label }}
-                </option>
-              </select>
-            </label>
+                  <span class="option-name">{{ option.label }}</span>
+                  <span v-if="option.key === currentProviderModelValue" class="option-check" aria-hidden="true">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="1.5 6 4.5 9 10.5 2"/>
+                    </svg>
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="toolbar-cluster">
@@ -2951,6 +3003,10 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
+.provider-model-selector {
+  position: relative;
+}
+
 .toolbar-cluster {
   display: flex;
   align-items: center;
@@ -3034,6 +3090,18 @@ onUnmounted(() => {
 
 .thinking-level-selector {
   position: relative;
+}
+
+.provider-model-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-model-menu {
+  min-width: 290px;
+  max-width: min(420px, calc(100vw - 2rem));
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
 }
 
 .thinking-level-btn {
@@ -3666,6 +3734,14 @@ onUnmounted(() => {
   .thinking-level-btn,
   .thinking-visibility-btn {
     flex: 1;
+  }
+
+  .provider-model-selector {
+    flex: 1 1 180px;
+  }
+
+  .provider-model-selector .thinking-level-btn {
+    width: 100%;
   }
 
   .toolbar-right {

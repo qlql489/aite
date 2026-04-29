@@ -1,6 +1,6 @@
 [package]
 name = "aite"
-version = "0.1.0"
+version = "0.1.1"
 description = "Aite desktop application"
 authors = ["GPT-5 Codex"]
 edition = "2021"
