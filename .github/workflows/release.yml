@@ -13,9 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release:
+  build-macos:
     name: Release ${{ matrix.name }}
-    runs-on: ${{ matrix.platform }}
+    runs-on: macos-14
     env:
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -28,20 +28,13 @@ jobs:
       matrix:
         include:
           - name: macOS Apple Silicon
-            platform: macos-14
-            targets: "aarch64-apple-darwin"
-            args: "--target aarch64-apple-darwin"
-            is_macos: true
+            rust_target: aarch64-apple-darwin
+            bundle_dir: src-tauri/target/aarch64-apple-darwin/release/bundle
+            updater_suffix: aarch64
           - name: macOS Intel
-            platform: macos-14
-            targets: "x86_64-apple-darwin"
-            args: "--target x86_64-apple-darwin"
-            is_macos: true
-          - name: Windows
-            platform: windows-2022
-            targets: ""
-            args: ""
-            is_macos: false
+            rust_target: x86_64-apple-darwin
+            bundle_dir: src-tauri/target/x86_64-apple-darwin/release/bundle
+            updater_suffix: x64
 
     steps:
       - name: Checkout source
@@ -56,7 +49,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.targets }}
+          targets: ${{ matrix.rust_target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -87,18 +80,13 @@ jobs:
             exit 1
           fi
 
-      - name: Build shared CLI assets
-        run: npm run build:cli
-
       - name: Prepare macOS CI environment
-        if: ${{ matrix.is_macos }}
         shell: bash
         run: |
           echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
           echo "APPLE_CERTIFICATE_IMPORT_STATUS=not_configured" >> "$GITHUB_ENV"
 
       - name: Import Apple Developer certificate
-        if: ${{ matrix.is_macos }}
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -152,50 +140,191 @@ jobs:
           echo "APPLE_CERTIFICATE_IMPORT_STATUS=imported" >> "$GITHUB_ENV"
 
       - name: Write App Store Connect API key
-        if: ${{ matrix.is_macos && env.APPLE_API_KEY != '' && env.APPLE_API_ISSUER != '' && env.APPLE_API_PRIVATE_KEY != '' }}
+        if: ${{ env.APPLE_API_KEY != '' && env.APPLE_API_ISSUER != '' && env.APPLE_API_PRIVATE_KEY != '' }}
         shell: bash
         run: |
           set -euo pipefail
           printf '%s' "$APPLE_API_PRIVATE_KEY" > "$APPLE_API_KEY_PATH"
 
-      - name: Print macOS signing summary
-        if: ${{ matrix.is_macos }}
+      - name: Build macOS bundle
         shell: bash
-        run: |
-          if [ "${APPLE_CERTIFICATE_IMPORT_STATUS:-not_configured}" != "imported" ] && [ "${APPLE_CERTIFICATE_IMPORT_STATUS:-not_configured}" != "not_configured" ]; then
-            echo "WARN: Apple 证书导入状态为 ${APPLE_CERTIFICATE_IMPORT_STATUS}，本次 macOS 产物将回退为未签名构建。"
-          fi
-
-          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-            echo "WARN: 未配置 Developer ID 证书，本次 macOS 产物仍会触发 Gatekeeper 提示。"
-          fi
-
-          if [ -z "${APPLE_API_KEY:-}" ] || [ -z "${APPLE_API_ISSUER:-}" ] || [ ! -f "${APPLE_API_KEY_PATH:-}" ]; then
-            if [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
-              echo "WARN: 未配置 notarization 凭据，本次 macOS 产物仍会显示“Apple 无法验证”。"
-            fi
-          fi
-
-      - name: Build and publish release
-        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_TEAM_ID || '' }}
-          APPLE_API_KEY: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_API_KEY != '' && env.APPLE_API_ISSUER != '' && env.APPLE_API_PRIVATE_KEY != '' && env.APPLE_API_KEY || '' }}
-          APPLE_API_ISSUER: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_API_KEY != '' && env.APPLE_API_ISSUER != '' && env.APPLE_API_PRIVATE_KEY != '' && env.APPLE_API_ISSUER || '' }}
-          APPLE_API_KEY_PATH: ${{ matrix.is_macos && env.APPLE_CERTIFICATE_IMPORT_STATUS == 'imported' && env.APPLE_API_KEY != '' && env.APPLE_API_ISSUER != '' && env.APPLE_API_PRIVATE_KEY != '' && env.APPLE_API_KEY_PATH || '' }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Aite ${{ github.ref_name }}
-          releaseBody: |
-            Aite 自动构建发布产物。
+        run: |
+          set -euo pipefail
 
-            该 release 同时包含桌面安装包与 Tauri updater 所需的更新元数据。
-          releaseDraft: false
+          if [ "${APPLE_CERTIFICATE_IMPORT_STATUS:-not_configured}" = "imported" ]; then
+            echo "INFO: 使用 Developer ID 证书构建并尝试 notarization。"
+            npx tauri build --target "${{ matrix.rust_target }}"
+          else
+            echo "WARN: 未检测到可用 Apple 证书，回退为未签名 macOS 构建。"
+            env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD -u KEYCHAIN_PASSWORD \
+              -u APPLE_SIGNING_IDENTITY -u APPLE_ID -u APPLE_PASSWORD -u APPLE_TEAM_ID \
+              -u APPLE_API_KEY -u APPLE_API_ISSUER -u APPLE_API_KEY_PATH -u APPLE_API_PRIVATE_KEY \
+              npx tauri build --target "${{ matrix.rust_target }}"
+          fi
+
+      - name: Collect macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION=$(node -p "require('./package.json').version")
+          ASSET_DIR="$RUNNER_TEMP/release-assets"
+          BUNDLE_DIR="${{ matrix.bundle_dir }}"
+
+          rm -rf "$ASSET_DIR"
+          mkdir -p "$ASSET_DIR"
+
+          DMG=$(find "$BUNDLE_DIR" -path "*/dmg/*.dmg" -type f | head -1 || true)
+          if [ -z "$DMG" ]; then
+            echo "未找到 macOS dmg 安装包" >&2
+            exit 1
+          fi
+          cp "$DMG" "$ASSET_DIR/Aite-v${VERSION}-macOS-${{ matrix.updater_suffix }}.dmg"
+
+          TAR_GZ=$(find "$BUNDLE_DIR" -path "*/macos/*.app.tar.gz" -type f | head -1 || true)
+          if [ -z "$TAR_GZ" ]; then
+            echo "未找到 macOS updater 包 (*.app.tar.gz)" >&2
+            exit 1
+          fi
+          cp "$TAR_GZ" "$ASSET_DIR/Aite_${{ matrix.updater_suffix }}.app.tar.gz"
+
+          SIG=$(find "$BUNDLE_DIR" -path "*/macos/*.sig" -type f | head -1 || true)
+          if [ -z "$SIG" ]; then
+            echo "未找到 macOS updater 签名 (*.sig)" >&2
+            exit 1
+          fi
+          cp "$SIG" "$ASSET_DIR/Aite_${{ matrix.updater_suffix }}.app.tar.gz.sig"
+
+          {
+            echo "### ${{ matrix.name }}"
+            echo ""
+            echo "- Aite-v${VERSION}-macOS-${{ matrix.updater_suffix }}.dmg"
+            echo "- Aite_${{ matrix.updater_suffix }}.app.tar.gz"
+            echo "- Aite_${{ matrix.updater_suffix }}.app.tar.gz.sig"
+            echo ""
+            if [ "${APPLE_CERTIFICATE_IMPORT_STATUS:-not_configured}" = "imported" ]; then
+              echo "- 已启用 Apple 签名身份: ${APPLE_SIGNING_IDENTITY}"
+            else
+              echo "- 未配置 Apple 证书，当前为未签名构建"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-${{ matrix.updater_suffix }}
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+
+  build-windows:
+    name: Release Windows
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install node-backend dependencies
+        run: npm ci --prefix node-backend
+
+      - name: Verify updater signing secrets
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "缺少 TAURI_SIGNING_PRIVATE_KEY，无法生成 updater 签名产物。" >&2
+            exit 1
+          fi
+
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            echo "缺少 TAURI_SIGNING_PRIVATE_KEY_PASSWORD，无法解锁 updater 私钥。" >&2
+            exit 1
+          fi
+
+      - name: Build shared CLI assets
+        run: npm run build:cli
+
+      - name: Build Windows MSI
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npx tauri build
+
+      - name: Collect Windows artifacts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $version = node -p "require('./package.json').version"
+          $assetDir = Join-Path $env:RUNNER_TEMP 'release-assets'
+
+          if (Test-Path $assetDir) {
+            Remove-Item -Recurse -Force $assetDir
+          }
+          New-Item -ItemType Directory -Path $assetDir | Out-Null
+
+          $msi = Get-ChildItem -Path 'src-tauri/target' -Recurse -Filter *.msi | Select-Object -First 1
+          if ($null -eq $msi) {
+            throw '未找到 Windows MSI 安装包'
+          }
+          Copy-Item $msi.FullName (Join-Path $assetDir "Aite-v$version-Windows.msi")
+
+          $sig = Get-ChildItem -Path 'src-tauri/target' -Recurse -Filter *.sig | Where-Object { $_.FullName -match 'bundle[\\/]+msi|bundle[\\/]+nsis' } | Select-Object -First 1
+          if ($null -ne $sig) {
+            Copy-Item $sig.FullName (Join-Path $assetDir $sig.Name)
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - build-macos
+      - build-windows
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/release-assets
+          merge-multiple: true
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Aite ${{ github.ref_name }}
+          generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          args: ${{ matrix.args }}
+          files: ${{ runner.temp }}/release-assets/*
