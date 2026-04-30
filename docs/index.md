@@ -7,6 +7,9 @@ hero:
   tagline: "覆盖安装、项目与聊天工作流、设置与扩展能力。"
   actions:
     - theme: brand
+      text: 下载 macOS / Windows
+      link: https://github.com/qlql489/aite/releases
+    - theme: brand
       text: 开始阅读
       link: /quick-start/
     - theme: alt
@@ -24,6 +27,20 @@ features:
   - title: 设置
     details: 覆盖全局 Command、Skill、MCP 管理，供应商配置与费用统计，外观设置，CLI 参数与自动更新。
 ---
+
+<div style="margin: 28px 0 12px;">
+  <img
+    src="/img/main.png"
+    alt="Aite 主界面预览"
+    style="display: block; width: min(100%, 960px); height: auto; margin: 0 auto; border-radius: 18px; box-shadow: 0 20px 48px rgba(15, 23, 42, 0.14); border: 1px solid rgba(148, 163, 184, 0.18);"
+  />
+</div>
+
+## 下载安装
+
+- macOS：从 [Releases](https://github.com/qlql489/aite/releases) 下载 `.dmg` 安装包，支持 Apple Silicon 和 Intel
+- Windows：从 [Releases](https://github.com/qlql489/aite/releases) 下载 `.msi` 安装包
+- 首次安装如果遇到环境或系统拦截问题，可直接查看 [安装与环境准备](/quick-start/installation)
 
 ## 推荐阅读路径
 

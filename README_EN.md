@@ -105,38 +105,42 @@ Download the `.msi` installer from [Releases](https://github.com/qlql489/aite/re
 
 ### Multi-project and session management
 
-Stop juggling terminal windows and manage local projects together with Claude Code sessions in one place.
+Bring scattered Claude Code working contexts out of terminal windows and into one desktop workspace.
 
 - Quickly import and switch local projects
-- Create, resume, and persist sessions
-- Search historical sessions and jump back fast
+- Create, resume, persist, and continue sessions
+- Restore message history order together with session settings such as model, permission mode, and thinking level
+- Search historical sessions and jump back fast when working across multiple tasks
 
 ### Message and tool visualization
 
-Make every Claude Code interaction visible and easy to inspect.
+Make Claude Code outputs, intermediate steps, and execution state visible and easy to inspect.
 
-- Stream all message types including thinking, tool calls, subagents, and images
+- Stream all message types including thinking, tool calls, subagents, images, and attachments
+- Clearly distinguish running, completed, failed, and waiting-for-approval states
 - Present tool calls in a structured way, with diff views for `Edit` and `Write`
-- Review permission requests directly inside the chat stream, with approve, reject, and always-allow actions
+- Show subagent execution as separate blocks so their steps, status, and results are easier to follow
+- Review permission requests directly inside the chat stream, with approve, reject, always-allow actions, and session-level permission mode control
 - Visualize todo progress and completion state
 
 ### File and code collaboration
 
-Integrate smoothly with local project workflows.
+Keep chat, code context, and editor workflows in the same workspace.
 
 - `@` file references, with support for directories, images, and file attachments
-- Workspace tree browsing and inline file editing
+- Workspace tree browsing, project-wide file search, and lightweight inline editing
 - Integrated Git status, branch, and change information
-- VSCode IDE context injection support
+- Detect and connect to your IDE, then bring the current code selection into chat context
 
 ### Configuration and extension management
 
-Replace command-line-heavy configuration with a visual interface.
+Move capabilities that normally live across CLI flags, config files, and environment variables into one visual interface.
 
-- Unified management for MCP servers, skills, and commands
-- Model switching and thinking-level selection
-- Support for custom LLMs (Anthropic/OpenAI protocol compatible)
-- Token usage statistics and CLI argument configuration
+- Unified management for global and project-level MCP servers, skills, and commands
+- Visual controls for model switching, thinking level, and default permission mode
+- Support custom LLM providers with Anthropic / OpenAI compatibility and runtime provider bridge support
+- View token usage and cost statistics by model, session, and timeline
+- Save Claude CLI arguments, check installation status, and handle auto updates
 
 <a id="architecture-overview"></a>
 ## Architecture Overview

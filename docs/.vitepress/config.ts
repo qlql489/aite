@@ -5,13 +5,14 @@ export default defineConfig({
   title: 'Aite 文档',
   description: 'Aite 使用文档与功能说明',
   base: '/aite/',
-  lastUpdated: true,
+  lastUpdated: false,
   themeConfig: {
     nav: [
       { text: '首页', link: '/' },
       { text: '快速开始', link: '/quick-start/' },
       { text: '项目与聊天', link: '/project-chat/' },
       { text: '设置', link: '/settings/' },
+      { text: '下载', link: 'https://github.com/qlql489/aite/releases' },
     ],
     sidebar: [
       {

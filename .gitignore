@@ -58,3 +58,4 @@ src-tauri/WixTools
 src-tauri/rust_out
 .claude/
 claude.md
+docs/.vitepress/cache/
