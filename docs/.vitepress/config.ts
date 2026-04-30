@@ -4,7 +4,7 @@ export default defineConfig({
   lang: 'zh-CN',
   title: 'Aite 文档',
   description: 'Aite 使用文档与功能说明',
-  base: '/aite/',
+  base: '/',
   lastUpdated: false,
   themeConfig: {
     nav: [
