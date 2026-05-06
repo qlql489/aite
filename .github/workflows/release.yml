@@ -191,7 +191,10 @@ jobs:
           fi
           cp "$TAR_GZ" "$ASSET_DIR/Aite_${{ matrix.updater_suffix }}.app.tar.gz"
 
-          SIG=$(find "$BUNDLE_DIR" -path "*/macos/*.sig" -type f | head -1 || true)
+          SIG="${TAR_GZ}.sig"
+          if [ ! -f "$SIG" ]; then
+            SIG=$(find "$(dirname "$TAR_GZ")" -maxdepth 1 -name '*.sig' -type f | head -1 || true)
+          fi
           if [ -z "$SIG" ]; then
             echo "未找到 macOS updater 签名 (*.sig)" >&2
             exit 1
@@ -288,15 +291,24 @@ jobs:
           }
           New-Item -ItemType Directory -Path $assetDir | Out-Null
 
-          $msi = Get-ChildItem -Path 'src-tauri/target' -Recurse -Filter *.msi | Select-Object -First 1
+          $msi = Get-ChildItem -Path 'src-tauri/target' -Recurse -Filter *.msi |
+            Where-Object { $_.FullName -match 'bundle[\\/]+msi' } |
+            Select-Object -First 1
           if ($null -eq $msi) {
             throw '未找到 Windows MSI 安装包'
           }
-          Copy-Item $msi.FullName (Join-Path $assetDir "Aite-v$version-Windows.msi")
+          $msiAsset = Join-Path $assetDir "Aite-v$version-Windows.msi"
+          Copy-Item $msi.FullName $msiAsset
 
-          $sig = Get-ChildItem -Path 'src-tauri/target' -Recurse -Filter *.sig | Where-Object { $_.FullName -match 'bundle[\\/]+msi|bundle[\\/]+nsis' } | Select-Object -First 1
-          if ($null -ne $sig) {
-            Copy-Item $sig.FullName (Join-Path $assetDir $sig.Name)
+          $msiSigPath = "$($msi.FullName).sig"
+          if (Test-Path $msiSigPath) {
+            Copy-Item $msiSigPath "$msiAsset.sig"
+          } else {
+            $sig = Get-ChildItem -Path $msi.Directory.FullName -Filter *.sig | Select-Object -First 1
+            if ($null -eq $sig) {
+              throw '未找到与 MSI 对应的 updater 签名 (*.sig)'
+            }
+            Copy-Item $sig.FullName "$msiAsset.sig"
           }
 
       - name: Upload Windows artifacts
@@ -319,6 +331,43 @@ jobs:
         with:
           path: ${{ runner.temp }}/release-assets
           merge-multiple: true
+
+      - name: Generate updater manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_NAME='${{ github.ref_name }}'
+          VERSION="${TAG_NAME#v}"
+          ASSET_DIR="${{ runner.temp }}/release-assets"
+          REPO='${{ github.repository }}'
+          PUB_DATE="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          MAC_AARCH64_SIG="$(tr -d '\r\n' < "$ASSET_DIR/Aite_aarch64.app.tar.gz.sig")"
+          MAC_X64_SIG="$(tr -d '\r\n' < "$ASSET_DIR/Aite_x64.app.tar.gz.sig")"
+          WINDOWS_X64_SIG="$(tr -d '\r\n' < "$ASSET_DIR/Aite-v${VERSION}-Windows.msi.sig")"
+
+          cat > "$ASSET_DIR/latest.json" <<EOF
+          {
+            "version": "${VERSION}",
+            "notes": "See the GitHub release notes for details.",
+            "pub_date": "${PUB_DATE}",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "${MAC_AARCH64_SIG}",
+                "url": "https://github.com/${REPO}/releases/download/${TAG_NAME}/Aite_aarch64.app.tar.gz"
+              },
+              "darwin-x86_64": {
+                "signature": "${MAC_X64_SIG}",
+                "url": "https://github.com/${REPO}/releases/download/${TAG_NAME}/Aite_x64.app.tar.gz"
+              },
+              "windows-x86_64": {
+                "signature": "${WINDOWS_X64_SIG}",
+                "url": "https://github.com/${REPO}/releases/download/${TAG_NAME}/Aite-v${VERSION}-Windows.msi"
+              }
+            }
+          }
+          EOF
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
