@@ -12,7 +12,6 @@ import { FolderIcon, AddIcon, RefreshIcon, FileImportIcon, Settings01Icon, Searc
 import ImportProjectsDialog from './ImportProjectsDialog.vue';
 import WelcomePage from './WelcomePage.vue';
 import Settings from './Settings.vue';
-import tauriConfig from '../../src-tauri/tauri.conf.json';
 import ProjectDirectoryPanel from './ProjectDirectoryPanel.vue';
 import MessageList from './chat/MessageList.vue';
 import MessageInput from './chat/MessageInput.vue';
@@ -508,7 +507,7 @@ const isMouseDown = ref(false);
 const displayProjects = ref<Project[]>([]); // 显示用的项目列表（拖拽时顺序会变）
 const suppressProjectClick = ref(false);
 const isSettingsVisible = ref(false);
-const appVersion = tauriConfig.version;
+const appVersion = ref('');
 const projectSearchQuery = ref('');
 const projectSortMode = ref<'project' | 'time' | 'chat'>('project');
 const isProjectSortMenuOpen = ref(false);
@@ -3623,6 +3622,13 @@ const playCompletionSound = () => {
 
 // 设置事件监听
 onMounted(async () => {
+  try {
+    const { getVersion } = await import('@tauri-apps/api/app');
+    appVersion.value = await getVersion();
+  } catch (error) {
+    console.error('读取应用版本失败:', error);
+  }
+
   window.addEventListener('keydown', handleWindowSearchShortcut);
   window.addEventListener('resize', syncWorkspacePanelWidth);
   document.addEventListener('mousedown', handleProjectSortOutsideClick);
