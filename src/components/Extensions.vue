@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, type Ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useSlashesStore } from '../stores/slashes';
@@ -112,6 +112,7 @@ const skillFileSize = ref(0);
 const commandMainRef = ref<HTMLElement | null>(null);
 const skillMainRef = ref<HTMLElement | null>(null);
 const skillEditorLayoutRef = ref<HTMLElement | null>(null);
+const extensionsViewRef = ref<HTMLElement | null>(null);
 const commandListWidth = ref(280);
 const skillListWidth = ref(280);
 const skillTreeWidth = ref(280);
@@ -133,6 +134,18 @@ const newCommandScope = ref<'global' | 'project'>('global');
 const showDeleteConfirmDialog = ref(false);
 const pendingDeleteItem = ref<SkillFile | null>(null);
 const pendingDeleteType = ref<'command' | 'skill' | null>(null);
+const commandFindVisible = ref(false);
+const commandFindQuery = ref('');
+const commandFindMatches = ref<number[]>([]);
+const commandFindActiveIndex = ref(-1);
+const commandFindInputRef = ref<HTMLInputElement | null>(null);
+const commandTextareaRef = ref<HTMLTextAreaElement | null>(null);
+const skillFindVisible = ref(false);
+const skillFindQuery = ref('');
+const skillFindMatches = ref<number[]>([]);
+const skillFindActiveIndex = ref(-1);
+const skillFindInputRef = ref<HTMLInputElement | null>(null);
+const skillTextareaRef = ref<HTMLTextAreaElement | null>(null);
 
 // 过滤后的 skills
 const filteredSkills = computed(() => {
@@ -348,6 +361,7 @@ function clearSelectedCommandState() {
   commandContent.value = '';
   commandLoading.value = false;
   commandSaved.value = false;
+  closeEditorFind('command');
 }
 
 function clearSelectedSkillState() {
@@ -360,6 +374,7 @@ function clearSelectedSkillState() {
   selectedSkillTreeFile.value = '';
   selectedSkillRootPath.value = '';
   skillFileSize.value = 0;
+  closeEditorFind('skill');
 }
 
 async function refreshCommandConfig() {
@@ -481,6 +496,18 @@ watch(
   }
 );
 
+watch([commandFindQuery, commandContent], () => {
+  if (commandFindVisible.value) {
+    refreshEditorFindMatches('command');
+  }
+});
+
+watch([skillFindQuery, skillContent], () => {
+  if (skillFindVisible.value) {
+    refreshEditorFindMatches('skill');
+  }
+});
+
 // 初始化 MCP JSON 文本
 function initMcpJsonText(server?: McpServer) {
   if (server) {
@@ -598,6 +625,182 @@ function toggleSkillTreePath(path: string) {
     next.add(path);
   }
   skillExpandedPaths.value = next;
+}
+
+type EditorSearchTarget = 'command' | 'skill';
+
+interface EditorSearchState {
+  visible: Ref<boolean>;
+  query: Ref<string>;
+  matches: Ref<number[]>;
+  activeIndex: Ref<number>;
+  inputRef: Ref<HTMLInputElement | null>;
+  textareaRef: Ref<HTMLTextAreaElement | null>;
+  content: Ref<string>;
+}
+
+function getEditorSearchState(target: EditorSearchTarget): EditorSearchState {
+  if (target === 'command') {
+    return {
+      visible: commandFindVisible,
+      query: commandFindQuery,
+      matches: commandFindMatches,
+      activeIndex: commandFindActiveIndex,
+      inputRef: commandFindInputRef,
+      textareaRef: commandTextareaRef,
+      content: commandContent,
+    };
+  }
+
+  return {
+    visible: skillFindVisible,
+    query: skillFindQuery,
+    matches: skillFindMatches,
+    activeIndex: skillFindActiveIndex,
+    inputRef: skillFindInputRef,
+    textareaRef: skillTextareaRef,
+    content: skillContent,
+  };
+}
+
+function collectMatchIndices(content: string, query: string): number[] {
+  if (!query) return [];
+
+  const normalizedContent = content.toLowerCase();
+  const normalizedQuery = query.toLowerCase();
+  const matches: number[] = [];
+  let cursor = 0;
+
+  while (cursor <= normalizedContent.length - normalizedQuery.length) {
+    const index = normalizedContent.indexOf(normalizedQuery, cursor);
+    if (index === -1) break;
+    matches.push(index);
+    cursor = index + Math.max(normalizedQuery.length, 1);
+  }
+
+  return matches;
+}
+
+function scrollTextareaToSelection(textarea: HTMLTextAreaElement, start: number) {
+  const lineHeight = Number.parseFloat(window.getComputedStyle(textarea).lineHeight) || 21;
+  const lineIndex = textarea.value.slice(0, start).split('\n').length - 1;
+  const targetScrollTop = Math.max(lineIndex * lineHeight - textarea.clientHeight / 2, 0);
+  textarea.scrollTop = targetScrollTop;
+}
+
+function focusEditorTextarea(target: EditorSearchTarget) {
+  getEditorSearchState(target).textareaRef.value?.focus();
+}
+
+function applyEditorFindSelection(target: EditorSearchTarget, index: number) {
+  const state = getEditorSearchState(target);
+  const textarea = state.textareaRef.value;
+  const query = state.query.value;
+  const start = state.matches.value[index];
+
+  if (!textarea || !query || start == null) return;
+
+  textarea.setSelectionRange(start, start + query.length);
+  scrollTextareaToSelection(textarea, start);
+}
+
+function refreshEditorFindMatches(target: EditorSearchTarget) {
+  const state = getEditorSearchState(target);
+  const query = state.query.value.trim();
+
+  if (!query) {
+    state.matches.value = [];
+    state.activeIndex.value = -1;
+    return;
+  }
+
+  const matches = collectMatchIndices(state.content.value, query);
+  state.matches.value = matches;
+
+  if (matches.length === 0) {
+    state.activeIndex.value = -1;
+    return;
+  }
+
+  if (state.activeIndex.value < 0 || state.activeIndex.value >= matches.length) {
+    state.activeIndex.value = 0;
+  }
+
+  applyEditorFindSelection(target, state.activeIndex.value);
+}
+
+function openEditorFind(target: EditorSearchTarget) {
+  const state = getEditorSearchState(target);
+  const textarea = state.textareaRef.value;
+  const selectedText = textarea
+    ? textarea.value.slice(textarea.selectionStart, textarea.selectionEnd).trim()
+    : '';
+
+  state.visible.value = true;
+  if (!state.query.value && selectedText && !selectedText.includes('\n')) {
+    state.query.value = selectedText;
+  }
+
+  refreshEditorFindMatches(target);
+  void nextTick(() => {
+    state.inputRef.value?.focus();
+    state.inputRef.value?.select();
+  });
+}
+
+function closeEditorFind(target: EditorSearchTarget, focusTextarea = false) {
+  const state = getEditorSearchState(target);
+  state.visible.value = false;
+  state.matches.value = [];
+  state.activeIndex.value = -1;
+  if (focusTextarea) {
+    void nextTick(() => {
+      focusEditorTextarea(target);
+    });
+  }
+}
+
+function goToEditorFindMatch(target: EditorSearchTarget, direction: 1 | -1) {
+  const state = getEditorSearchState(target);
+  const count = state.matches.value.length;
+  if (count === 0) return;
+
+  const nextIndex = state.activeIndex.value < 0
+    ? 0
+    : (state.activeIndex.value + direction + count) % count;
+
+  state.activeIndex.value = nextIndex;
+  applyEditorFindSelection(target, nextIndex);
+}
+
+function handleEditorFindKeydown(target: EditorSearchTarget, event: KeyboardEvent) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    goToEditorFindMatch(target, event.shiftKey ? -1 : 1);
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeEditorFind(target, true);
+  }
+}
+
+function handleExtensionsKeydown(event: KeyboardEvent) {
+  const isFindShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f';
+  if (!isFindShortcut) return;
+
+  if (showCommandCreate.value || showSkillCreate.value || showMcpDialog.value || showDeleteConfirmDialog.value) {
+    return;
+  }
+
+  if (activeTab.value === 'command' && selectedCommand.value) {
+    event.preventDefault();
+    openEditorFind('command');
+  } else if (activeTab.value === 'skill' && selectedSkill.value) {
+    event.preventDefault();
+    openEditorFind('skill');
+  }
 }
 
 // 添加 MCP 服务器
@@ -952,6 +1155,7 @@ function switchMcpEditMode(mode: 'form' | 'json') {
 
 // 选择 Skill
 async function selectSkill(skill: SkillFile) {
+  closeEditorFind('skill');
   selectedSkill.value = skill;
   skillTreeQuery.value = '';
   await loadSkillTree(skill);
@@ -962,6 +1166,7 @@ async function selectSkill(skill: SkillFile) {
 
 // 选择 Command
 async function selectCommand(cmd: SkillFile) {
+  closeEditorFind('command');
   selectedCommand.value = cmd;
   commandLoading.value = true;
   try {
@@ -1190,6 +1395,12 @@ async function createCommand() {
 }
 
 function handleCommandKeyDown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    openEditorFind('command');
+    return;
+  }
+
   if (e.key === 'Tab') {
     e.preventDefault();
     const textarea = e.target as HTMLTextAreaElement;
@@ -1209,6 +1420,12 @@ function handleCommandKeyDown(e: KeyboardEvent) {
 
 // Skill 编辑器键盘事件
 function handleSkillKeyDown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault();
+    openEditorFind('skill');
+    return;
+  }
+
   if (e.key === 'Tab') {
     e.preventDefault();
     const textarea = e.target as HTMLTextAreaElement;
@@ -1250,7 +1467,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="extensions-view" :class="{ 'is-resizing': isAnyPanelResizing }">
+  <div
+    ref="extensionsViewRef"
+    class="extensions-view"
+    :class="{ 'is-resizing': isAnyPanelResizing }"
+    tabindex="-1"
+    @keydown.capture="handleExtensionsKeydown"
+  >
     <transition name="toast-fade">
       <div v-if="showSkillToast" class="skill-toast skill-toast-success">
         {{ skillToastMessage }}
@@ -1434,6 +1657,14 @@ onBeforeUnmount(() => {
                     <HugeiconsIcon :icon="LayoutTwoColumnIcon" class="icon-sm" />
                   </button>
 
+                  <button
+                    class="toolbar-btn"
+                    @click="openEditorFind('command')"
+                    title="搜索 (Cmd/Ctrl+F)"
+                  >
+                    <HugeiconsIcon :icon="Search01Icon" class="icon-sm" />
+                  </button>
+
                   <div class="toolbar-divider"></div>
 
                   <!-- Save -->
@@ -1462,8 +1693,46 @@ onBeforeUnmount(() => {
               <!-- Content area -->
               <div class="command-editor-content">
                 <div v-if="commandViewMode === 'edit'" class="command-textarea-wrapper">
+                  <div v-if="commandFindVisible" class="editor-find-bar">
+                    <HugeiconsIcon :icon="Search01Icon" class="icon-sm editor-find-icon" />
+                    <input
+                      ref="commandFindInputRef"
+                      v-model="commandFindQuery"
+                      type="text"
+                      class="editor-find-input"
+                      placeholder="搜索当前命令..."
+                      @keydown="handleEditorFindKeydown('command', $event)"
+                    />
+                    <span class="editor-find-status">
+                      {{ commandFindMatches.length ? `${commandFindActiveIndex + 1}/${commandFindMatches.length}` : '0/0' }}
+                    </span>
+                    <button
+                      type="button"
+                      class="editor-find-btn"
+                      :disabled="commandFindMatches.length === 0"
+                      @click="goToEditorFindMatch('command', -1)"
+                    >
+                      上一个
+                    </button>
+                    <button
+                      type="button"
+                      class="editor-find-btn"
+                      :disabled="commandFindMatches.length === 0"
+                      @click="goToEditorFindMatch('command', 1)"
+                    >
+                      下一个
+                    </button>
+                    <button
+                      type="button"
+                      class="editor-find-btn close"
+                      @click="closeEditorFind('command')"
+                    >
+                      关闭
+                    </button>
+                  </div>
                   <textarea
                     v-if="!commandLoading"
+                    ref="commandTextareaRef"
                     v-model="commandContent"
                     class="command-textarea"
                     placeholder="Write your command prompt in Markdown..."
@@ -1481,8 +1750,46 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-else-if="commandViewMode === 'split'" class="command-split">
                   <div class="command-textarea-wrapper">
+                    <div v-if="commandFindVisible" class="editor-find-bar">
+                      <HugeiconsIcon :icon="Search01Icon" class="icon-sm editor-find-icon" />
+                      <input
+                        ref="commandFindInputRef"
+                        v-model="commandFindQuery"
+                        type="text"
+                        class="editor-find-input"
+                        placeholder="搜索当前命令..."
+                        @keydown="handleEditorFindKeydown('command', $event)"
+                      />
+                      <span class="editor-find-status">
+                        {{ commandFindMatches.length ? `${commandFindActiveIndex + 1}/${commandFindMatches.length}` : '0/0' }}
+                      </span>
+                      <button
+                        type="button"
+                        class="editor-find-btn"
+                        :disabled="commandFindMatches.length === 0"
+                        @click="goToEditorFindMatch('command', -1)"
+                      >
+                        上一个
+                      </button>
+                      <button
+                        type="button"
+                        class="editor-find-btn"
+                        :disabled="commandFindMatches.length === 0"
+                        @click="goToEditorFindMatch('command', 1)"
+                      >
+                        下一个
+                      </button>
+                      <button
+                        type="button"
+                        class="editor-find-btn close"
+                        @click="closeEditorFind('command')"
+                      >
+                        关闭
+                      </button>
+                    </div>
                     <textarea
                       v-if="!commandLoading"
+                      ref="commandTextareaRef"
                       v-model="commandContent"
                       class="command-textarea"
                       placeholder="Write your command prompt in Markdown..."
@@ -1645,6 +1952,14 @@ onBeforeUnmount(() => {
                     <HugeiconsIcon :icon="Edit02Icon" class="icon-sm" />
                   </button>
 
+                  <button
+                    class="toolbar-btn"
+                    @click="openEditorFind('skill')"
+                    title="搜索 (Cmd/Ctrl+F)"
+                  >
+                    <HugeiconsIcon :icon="Search01Icon" class="icon-sm" />
+                  </button>
+
                   <div class="toolbar-divider"></div>
 
                   <!-- Save -->
@@ -1731,8 +2046,46 @@ onBeforeUnmount(() => {
                     </div>
 
                     <div v-if="skillViewMode === 'edit'" class="skill-textarea-wrapper">
+                      <div v-if="skillFindVisible" class="editor-find-bar">
+                        <HugeiconsIcon :icon="Search01Icon" class="icon-sm editor-find-icon" />
+                        <input
+                          ref="skillFindInputRef"
+                          v-model="skillFindQuery"
+                          type="text"
+                          class="editor-find-input"
+                          placeholder="搜索当前技能文件..."
+                          @keydown="handleEditorFindKeydown('skill', $event)"
+                        />
+                        <span class="editor-find-status">
+                          {{ skillFindMatches.length ? `${skillFindActiveIndex + 1}/${skillFindMatches.length}` : '0/0' }}
+                        </span>
+                        <button
+                          type="button"
+                          class="editor-find-btn"
+                          :disabled="skillFindMatches.length === 0"
+                          @click="goToEditorFindMatch('skill', -1)"
+                        >
+                          上一个
+                        </button>
+                        <button
+                          type="button"
+                          class="editor-find-btn"
+                          :disabled="skillFindMatches.length === 0"
+                          @click="goToEditorFindMatch('skill', 1)"
+                        >
+                          下一个
+                        </button>
+                        <button
+                          type="button"
+                          class="editor-find-btn close"
+                          @click="closeEditorFind('skill')"
+                        >
+                          关闭
+                        </button>
+                      </div>
                       <textarea
                         v-if="!skillLoading"
+                        ref="skillTextareaRef"
                         v-model="skillContent"
                         class="skill-textarea"
                         placeholder="Write your skill prompt in Markdown..."
@@ -1751,8 +2104,46 @@ onBeforeUnmount(() => {
                     </div>
                     <div v-else-if="skillViewMode === 'split'" class="skill-split">
                       <div class="skill-textarea-wrapper">
+                        <div v-if="skillFindVisible" class="editor-find-bar">
+                          <HugeiconsIcon :icon="Search01Icon" class="icon-sm editor-find-icon" />
+                          <input
+                            ref="skillFindInputRef"
+                            v-model="skillFindQuery"
+                            type="text"
+                            class="editor-find-input"
+                            placeholder="搜索当前技能文件..."
+                            @keydown="handleEditorFindKeydown('skill', $event)"
+                          />
+                          <span class="editor-find-status">
+                            {{ skillFindMatches.length ? `${skillFindActiveIndex + 1}/${skillFindMatches.length}` : '0/0' }}
+                          </span>
+                          <button
+                            type="button"
+                            class="editor-find-btn"
+                            :disabled="skillFindMatches.length === 0"
+                            @click="goToEditorFindMatch('skill', -1)"
+                          >
+                            上一个
+                          </button>
+                          <button
+                            type="button"
+                            class="editor-find-btn"
+                            :disabled="skillFindMatches.length === 0"
+                            @click="goToEditorFindMatch('skill', 1)"
+                          >
+                            下一个
+                          </button>
+                          <button
+                            type="button"
+                            class="editor-find-btn close"
+                            @click="closeEditorFind('skill')"
+                          >
+                            关闭
+                          </button>
+                        </div>
                         <textarea
                           v-if="!skillLoading"
+                          ref="skillTextareaRef"
                           v-model="skillContent"
                           class="skill-textarea"
                           placeholder="Write your skill prompt in Markdown..."
@@ -3814,11 +4205,15 @@ onBeforeUnmount(() => {
 
 .command-textarea-wrapper {
   height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .command-textarea {
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   padding: 1rem;
   border: none;
   resize: none;
@@ -3863,6 +4258,70 @@ onBeforeUnmount(() => {
 
 .command-split .command-preview {
   width: 50%;
+}
+
+.editor-find-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+  background-color: var(--bg-secondary, #f8fafc);
+  flex-shrink: 0;
+}
+
+.editor-find-icon {
+  color: var(--text-secondary, #6b7280);
+  flex-shrink: 0;
+}
+
+.editor-find-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 0.375rem;
+  background-color: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #111827);
+  font-size: 0.8125rem;
+}
+
+.editor-find-input:focus {
+  outline: none;
+  border-color: var(--primary-color, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.editor-find-status {
+  min-width: 3rem;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #6b7280);
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-find-btn {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 0.375rem;
+  background-color: var(--bg-primary, #ffffff);
+  color: var(--text-primary, #111827);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-find-btn:hover:not(:disabled) {
+  background-color: var(--bg-tertiary, #f3f4f6);
+}
+
+.editor-find-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.editor-find-btn.close {
+  color: var(--text-secondary, #6b7280);
 }
 
 .command-editor-footer {
@@ -4281,11 +4740,14 @@ onBeforeUnmount(() => {
 .skill-textarea-wrapper {
   height: 100%;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .skill-textarea {
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   padding: 1rem;
   border: none;
   resize: none;
@@ -4511,7 +4973,9 @@ onBeforeUnmount(() => {
   }
 
   .command-search-input,
-  .skill-search-input {
+  .skill-search-input,
+  .editor-find-input,
+  .editor-find-btn {
     background-color: var(--bg-primary, #1f2937);
     border-color: var(--border-color, #374151);
     color: var(--text-primary, #f9fafb);
@@ -4573,6 +5037,17 @@ onBeforeUnmount(() => {
 
   .skill-split .skill-textarea-wrapper {
     border-color: var(--border-color, #374151);
+  }
+
+  .editor-find-bar {
+    background-color: var(--bg-secondary, #111827);
+    border-color: var(--border-color, #374151);
+  }
+
+  .editor-find-status,
+  .editor-find-icon,
+  .editor-find-btn.close {
+    color: var(--text-secondary, #9ca3af);
   }
 
   .panel-resizer::before {
