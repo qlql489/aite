@@ -505,6 +505,11 @@ pub enum ContentBlock {
         is_error: Option<bool>,
     },
 
+    #[serde(rename = "tool_reference")]
+    ToolReference {
+        tool_name: String,
+    },
+
     #[serde(rename = "thinking")]
     Thinking {
         thinking: String,
@@ -744,6 +749,35 @@ mod tests {
                 assert_eq!(sys.session_id, Some("abc123".to_string()));
             }
             _ => panic!("Expected system message"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_user_tool_result_with_tool_reference() {
+        let json = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_466f6d9f76ca4de78a6840a9","content":[{"type":"tool_reference","tool_name":"mcp__playwright__browser_navigate"},{"type":"tool_reference","tool_name":"mcp__playwright__browser_snapshot"},{"type":"tool_reference","tool_name":"mcp__playwright__browser_take_screenshot"}]}]},"parent_tool_use_id":null,"session_id":"9b2094a6-38e6-4d11-88f4-9a0813613128","uuid":"7611b5c0-5c8e-4abd-b1be-f0ca31005d22","timestamp":"2026-05-07T07:10:55.513Z","tool_use_result":{"matches":["mcp__playwright__browser_navigate","mcp__playwright__browser_snapshot","mcp__playwright__browser_take_screenshot"],"query":"select:mcp__playwright__browser_navigate,mcp__playwright__browser_snapshot,mcp__playwright__browser_take_screenshot","total_deferred_tools":59}}"#;
+        let msg = deserialize_message(json).unwrap();
+
+        match msg {
+            SdkMessage::User(user) => match user.message {
+                UserMessageContent::Structured { content, .. } => {
+                    assert_eq!(content.len(), 1);
+                    match &content[0] {
+                        ContentBlock::ToolResult { content, .. } => match content {
+                            ToolResultContent::Multiple(blocks) => {
+                                assert_eq!(blocks.len(), 3);
+                                assert!(matches!(
+                                    blocks[0],
+                                    ContentBlock::ToolReference { ref tool_name } if tool_name == "mcp__playwright__browser_navigate"
+                                ));
+                            }
+                            _ => panic!("Expected multiple tool result content"),
+                        },
+                        _ => panic!("Expected tool_result block"),
+                    }
+                }
+                _ => panic!("Expected structured user message"),
+            },
+            _ => panic!("Expected user message"),
         }
     }
 
