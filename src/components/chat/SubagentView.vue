@@ -421,10 +421,18 @@ watch(hasPendingPermissionInTree, (hasPendingPermission) => {
                   <span class="live-trace-tool">{{ getToolLabel(call.name) }}</span>
                   <span class="live-trace-status">{{ getRuntimeCallStatusLabel(call) }}</span>
                 </div>
-                <div v-if="getRuntimeCallPreview(call)" class="live-trace-preview">
+                <div
+                  v-if="getRuntimeCallPreview(call)"
+                  class="live-trace-preview"
+                  :title="getRuntimeCallPreview(call)"
+                >
                   {{ getRuntimeCallPreview(call) }}
                 </div>
-                <div v-if="getRuntimeCallResultPreview(call)" class="live-trace-result">
+                <div
+                  v-if="getRuntimeCallResultPreview(call)"
+                  class="live-trace-result"
+                  :title="getRuntimeCallResultPreview(call)"
+                >
                   {{ getRuntimeCallResultPreview(call) }}
                 </div>
               </div>
@@ -932,7 +940,10 @@ watch(hasPendingPermissionInTree, (hasPendingPermission) => {
   font-size: 12px;
   line-height: 1.45;
   color: var(--text-secondary, #6b7280);
-  word-break: break-word;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .live-trace-result {

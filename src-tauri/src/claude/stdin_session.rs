@@ -1604,6 +1604,13 @@ impl StdinSessionManager {
                         media_source: None,
                     });
                 }
+                ContentBlock::ToolReference { tool_name } => {
+                    blocks.push(ModelContentBlock {
+                        r#type: "tool_reference".to_string(),
+                        content: tool_name.clone(),
+                        media_source: None,
+                    });
+                }
             }
         }
 
