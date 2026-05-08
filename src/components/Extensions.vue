@@ -140,12 +140,14 @@ const commandFindMatches = ref<number[]>([]);
 const commandFindActiveIndex = ref(-1);
 const commandFindInputRef = ref<HTMLInputElement | null>(null);
 const commandTextareaRef = ref<HTMLTextAreaElement | null>(null);
+const commandHighlightLayerRef = ref<HTMLElement | null>(null);
 const skillFindVisible = ref(false);
 const skillFindQuery = ref('');
 const skillFindMatches = ref<number[]>([]);
 const skillFindActiveIndex = ref(-1);
 const skillFindInputRef = ref<HTMLInputElement | null>(null);
 const skillTextareaRef = ref<HTMLTextAreaElement | null>(null);
+const skillHighlightLayerRef = ref<HTMLElement | null>(null);
 
 // 过滤后的 skills
 const filteredSkills = computed(() => {
@@ -499,12 +501,18 @@ watch(
 watch([commandFindQuery, commandContent], () => {
   if (commandFindVisible.value) {
     refreshEditorFindMatches('command');
+    void nextTick(() => {
+      syncEditorHighlightScroll('command');
+    });
   }
 });
 
 watch([skillFindQuery, skillContent], () => {
   if (skillFindVisible.value) {
     refreshEditorFindMatches('skill');
+    void nextTick(() => {
+      syncEditorHighlightScroll('skill');
+    });
   }
 });
 
@@ -636,6 +644,7 @@ interface EditorSearchState {
   activeIndex: Ref<number>;
   inputRef: Ref<HTMLInputElement | null>;
   textareaRef: Ref<HTMLTextAreaElement | null>;
+  highlightLayerRef: Ref<HTMLElement | null>;
   content: Ref<string>;
 }
 
@@ -648,6 +657,7 @@ function getEditorSearchState(target: EditorSearchTarget): EditorSearchState {
       activeIndex: commandFindActiveIndex,
       inputRef: commandFindInputRef,
       textareaRef: commandTextareaRef,
+      highlightLayerRef: commandHighlightLayerRef,
       content: commandContent,
     };
   }
@@ -659,9 +669,64 @@ function getEditorSearchState(target: EditorSearchTarget): EditorSearchState {
     activeIndex: skillFindActiveIndex,
     inputRef: skillFindInputRef,
     textareaRef: skillTextareaRef,
+    highlightLayerRef: skillHighlightLayerRef,
     content: skillContent,
   };
 }
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function buildHighlightedHtml(
+  content: string,
+  query: string,
+  matches: number[],
+  activeIndex: number,
+): string {
+  if (!content) {
+    return '&nbsp;';
+  }
+
+  if (!query || matches.length === 0) {
+    return escapeHtml(content);
+  }
+
+  const parts: string[] = [];
+  let cursor = 0;
+
+  matches.forEach((start, index) => {
+    const end = start + query.length;
+    parts.push(escapeHtml(content.slice(cursor, start)));
+    parts.push(
+      `<mark class="editor-search-highlight${index === activeIndex ? ' active' : ''}">` +
+      `${escapeHtml(content.slice(start, end))}</mark>`
+    );
+    cursor = end;
+  });
+
+  parts.push(escapeHtml(content.slice(cursor)));
+  return parts.join('');
+}
+
+const commandHighlightedContent = computed(() => buildHighlightedHtml(
+  commandContent.value,
+  commandFindQuery.value.trim(),
+  commandFindMatches.value,
+  commandFindActiveIndex.value,
+));
+
+const skillHighlightedContent = computed(() => buildHighlightedHtml(
+  skillContent.value,
+  skillFindQuery.value.trim(),
+  skillFindMatches.value,
+  skillFindActiveIndex.value,
+));
 
 function collectMatchIndices(content: string, query: string): number[] {
   if (!query) return [];
@@ -692,6 +757,17 @@ function focusEditorTextarea(target: EditorSearchTarget) {
   getEditorSearchState(target).textareaRef.value?.focus();
 }
 
+function syncEditorHighlightScroll(target: EditorSearchTarget, textarea?: HTMLTextAreaElement | null) {
+  const state = getEditorSearchState(target);
+  const source = textarea ?? state.textareaRef.value;
+  const highlightLayer = state.highlightLayerRef.value;
+
+  if (!source || !highlightLayer) return;
+
+  highlightLayer.scrollTop = source.scrollTop;
+  highlightLayer.scrollLeft = source.scrollLeft;
+}
+
 function applyEditorFindSelection(target: EditorSearchTarget, index: number) {
   const state = getEditorSearchState(target);
   const textarea = state.textareaRef.value;
@@ -702,6 +778,7 @@ function applyEditorFindSelection(target: EditorSearchTarget, index: number) {
 
   textarea.setSelectionRange(start, start + query.length);
   scrollTextareaToSelection(textarea, start);
+  syncEditorHighlightScroll(target, textarea);
 }
 
 function refreshEditorFindMatches(target: EditorSearchTarget) {
@@ -743,6 +820,7 @@ function openEditorFind(target: EditorSearchTarget) {
 
   refreshEditorFindMatches(target);
   void nextTick(() => {
+    syncEditorHighlightScroll(target);
     state.inputRef.value?.focus();
     state.inputRef.value?.select();
   });
@@ -784,6 +862,10 @@ function handleEditorFindKeydown(target: EditorSearchTarget, event: KeyboardEven
     event.preventDefault();
     closeEditorFind(target, true);
   }
+}
+
+function handleEditorTextareaScroll(target: EditorSearchTarget, event: Event) {
+  syncEditorHighlightScroll(target, event.target as HTMLTextAreaElement);
 }
 
 function handleExtensionsKeydown(event: KeyboardEvent) {
@@ -1730,14 +1812,24 @@ onBeforeUnmount(() => {
                       关闭
                     </button>
                   </div>
-                  <textarea
-                    v-if="!commandLoading"
-                    ref="commandTextareaRef"
-                    v-model="commandContent"
-                    class="command-textarea"
-                    placeholder="Write your command prompt in Markdown..."
-                    @keydown="handleCommandKeyDown"
-                  ></textarea>
+                  <div v-if="!commandLoading" class="editor-textarea-surface">
+                    <div
+                      v-if="commandFindQuery.trim() && commandFindMatches.length > 0"
+                      ref="commandHighlightLayerRef"
+                      class="editor-highlight-layer"
+                      aria-hidden="true"
+                    >
+                      <pre class="editor-highlight-content" v-html="commandHighlightedContent"></pre>
+                    </div>
+                    <textarea
+                      ref="commandTextareaRef"
+                      v-model="commandContent"
+                      class="command-textarea"
+                      placeholder="Write your command prompt in Markdown..."
+                      @keydown="handleCommandKeyDown"
+                      @scroll="handleEditorTextareaScroll('command', $event)"
+                    ></textarea>
+                  </div>
                   <div v-else class="command-loading">
                     <HugeiconsIcon :icon="Loading02Icon" class="icon-sm animate-spin" />
                     <span>Loading...</span>
@@ -1787,14 +1879,24 @@ onBeforeUnmount(() => {
                         关闭
                       </button>
                     </div>
-                    <textarea
-                      v-if="!commandLoading"
-                      ref="commandTextareaRef"
-                      v-model="commandContent"
-                      class="command-textarea"
-                      placeholder="Write your command prompt in Markdown..."
-                      @keydown="handleCommandKeyDown"
-                    ></textarea>
+                    <div v-if="!commandLoading" class="editor-textarea-surface">
+                      <div
+                        v-if="commandFindQuery.trim() && commandFindMatches.length > 0"
+                        ref="commandHighlightLayerRef"
+                        class="editor-highlight-layer"
+                        aria-hidden="true"
+                      >
+                        <pre class="editor-highlight-content" v-html="commandHighlightedContent"></pre>
+                      </div>
+                      <textarea
+                        ref="commandTextareaRef"
+                        v-model="commandContent"
+                        class="command-textarea"
+                        placeholder="Write your command prompt in Markdown..."
+                        @keydown="handleCommandKeyDown"
+                        @scroll="handleEditorTextareaScroll('command', $event)"
+                      ></textarea>
+                    </div>
                     <div v-else class="command-loading">
                       <HugeiconsIcon :icon="Loading02Icon" class="icon-sm animate-spin" />
                       <span>Loading...</span>
@@ -2083,14 +2185,24 @@ onBeforeUnmount(() => {
                           关闭
                         </button>
                       </div>
-                      <textarea
-                        v-if="!skillLoading"
-                        ref="skillTextareaRef"
-                        v-model="skillContent"
-                        class="skill-textarea"
-                        placeholder="Write your skill prompt in Markdown..."
-                        @keydown="handleSkillKeyDown"
-                      ></textarea>
+                      <div v-if="!skillLoading" class="editor-textarea-surface">
+                        <div
+                          v-if="skillFindQuery.trim() && skillFindMatches.length > 0"
+                          ref="skillHighlightLayerRef"
+                          class="editor-highlight-layer"
+                          aria-hidden="true"
+                        >
+                          <pre class="editor-highlight-content" v-html="skillHighlightedContent"></pre>
+                        </div>
+                        <textarea
+                          ref="skillTextareaRef"
+                          v-model="skillContent"
+                          class="skill-textarea"
+                          placeholder="Write your skill prompt in Markdown..."
+                          @keydown="handleSkillKeyDown"
+                          @scroll="handleEditorTextareaScroll('skill', $event)"
+                        ></textarea>
+                      </div>
                       <div v-else class="command-loading">
                         <HugeiconsIcon :icon="Loading02Icon" class="icon-sm animate-spin" />
                         <span>Loading...</span>
@@ -2141,14 +2253,24 @@ onBeforeUnmount(() => {
                             关闭
                           </button>
                         </div>
-                        <textarea
-                          v-if="!skillLoading"
-                          ref="skillTextareaRef"
-                          v-model="skillContent"
-                          class="skill-textarea"
-                          placeholder="Write your skill prompt in Markdown..."
-                          @keydown="handleSkillKeyDown"
-                        ></textarea>
+                        <div v-if="!skillLoading" class="editor-textarea-surface">
+                          <div
+                            v-if="skillFindQuery.trim() && skillFindMatches.length > 0"
+                            ref="skillHighlightLayerRef"
+                            class="editor-highlight-layer"
+                            aria-hidden="true"
+                          >
+                            <pre class="editor-highlight-content" v-html="skillHighlightedContent"></pre>
+                          </div>
+                          <textarea
+                            ref="skillTextareaRef"
+                            v-model="skillContent"
+                            class="skill-textarea"
+                            placeholder="Write your skill prompt in Markdown..."
+                            @keydown="handleSkillKeyDown"
+                            @scroll="handleEditorTextareaScroll('skill', $event)"
+                          ></textarea>
+                        </div>
                         <div v-else class="command-loading">
                           <HugeiconsIcon :icon="Loading02Icon" class="icon-sm animate-spin" />
                           <span>Loading...</span>
@@ -4210,6 +4332,47 @@ onBeforeUnmount(() => {
   flex-direction: column;
 }
 
+.editor-textarea-surface {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background-color: var(--bg-primary, #ffffff);
+}
+
+.editor-highlight-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.editor-highlight-content {
+  margin: 0;
+  min-height: 100%;
+  padding: 1rem;
+  box-sizing: border-box;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: transparent;
+}
+
+.editor-highlight-content :deep(mark.editor-search-highlight) {
+  background-color: rgba(59, 130, 246, 0.22);
+  border-radius: 0.25rem;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.18);
+  color: transparent;
+}
+
+.editor-highlight-content :deep(mark.editor-search-highlight.active) {
+  background-color: rgba(245, 158, 11, 0.34);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.26);
+}
+
 .command-textarea {
   width: 100%;
   flex: 1;
@@ -4220,8 +4383,11 @@ onBeforeUnmount(() => {
   font-family: 'SF Mono', Monaco, Consolas, monospace;
   font-size: 0.875rem;
   line-height: 1.5;
-  background-color: var(--bg-primary, #ffffff);
+  background-color: transparent;
   color: var(--text-primary, #1f2937);
+  caret-color: var(--text-primary, #1f2937);
+  position: relative;
+  z-index: 1;
 }
 
 .command-textarea:focus {
@@ -4754,8 +4920,11 @@ onBeforeUnmount(() => {
   font-family: 'SF Mono', Monaco, Consolas, monospace;
   font-size: 0.875rem;
   line-height: 1.5;
-  background-color: var(--bg-primary, #ffffff);
+  background-color: transparent;
   color: var(--text-primary, #1f2937);
+  caret-color: var(--text-primary, #1f2937);
+  position: relative;
+  z-index: 1;
 }
 
 .skill-textarea:focus {
@@ -5009,8 +5178,27 @@ onBeforeUnmount(() => {
   }
 
   .skill-textarea {
-    background-color: var(--bg-primary, #1f2937);
     color: var(--text-primary, #f9fafb);
+    caret-color: var(--text-primary, #f9fafb);
+  }
+
+  .command-textarea {
+    color: var(--text-primary, #f9fafb);
+    caret-color: var(--text-primary, #f9fafb);
+  }
+
+  .editor-textarea-surface {
+    background-color: var(--bg-primary, #1f2937);
+  }
+
+  .editor-highlight-content :deep(mark.editor-search-highlight) {
+    background-color: rgba(96, 165, 250, 0.28);
+    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.2);
+  }
+
+  .editor-highlight-content :deep(mark.editor-search-highlight.active) {
+    background-color: rgba(251, 191, 36, 0.38);
+    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.28);
   }
 
   .skill-preview {
