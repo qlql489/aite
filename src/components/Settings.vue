@@ -246,29 +246,6 @@ const isUpdateBusy = computed(() =>
   updateStatus.value === 'checking' || updateStatus.value === 'downloading'
 );
 
-const showHeaderUpdateAction = computed(() =>
-  autoUpdateEnabled.value &&
-  (updateStatus.value === 'available' ||
-    updateStatus.value === 'downloading' ||
-    updateStatus.value === 'ready')
-);
-
-const headerUpdateLabel = computed(() => {
-  if (updateStatus.value === 'downloading') {
-    return `${updateProgress.value}%`;
-  }
-
-  if (updateStatus.value === 'ready') {
-    return '重启更新';
-  }
-
-  if (updateVersion.value) {
-    return `v${updateVersion.value}`;
-  }
-
-  return '下载更新';
-});
-
 async function handleUpdateAction() {
   await updaterStore.performPrimaryAction();
 }
@@ -291,50 +268,7 @@ const emit = defineEmits<{
             </svg>
             <span>返回应用</span>
           </button>
-          <div class="view-title-row">
-            <h1 class="view-title">设置</h1>
-            <button
-              v-if="showHeaderUpdateAction"
-              class="header-update-button"
-              :class="{
-                downloading: updateStatus === 'downloading',
-                ready: updateStatus === 'ready',
-              }"
-              :disabled="isUpdateBusy || !autoUpdateEnabled"
-              :title="updateActionLabel"
-              @click="handleUpdateAction"
-            >
-              <svg
-                class="header-update-icon"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                aria-hidden="true"
-              >
-                <path
-                  d="M12 4.5V14.5"
-                  stroke="currentColor"
-                  stroke-width="1.9"
-                  stroke-linecap="round"
-                />
-                <path
-                  d="M8 10.75L12 14.75L16 10.75"
-                  stroke="currentColor"
-                  stroke-width="1.9"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-                <path
-                  d="M5 18.25H19"
-                  stroke="currentColor"
-                  stroke-width="1.9"
-                  stroke-linecap="round"
-                />
-              </svg>
-              <span>{{ headerUpdateLabel }}</span>
-            </button>
-          </div>
+          <h1 class="view-title">设置</h1>
         </div>
 
         <nav class="tabs-nav">
@@ -684,68 +618,6 @@ const emit = defineEmits<{
   font-weight: 700;
   color: #1e293b;
   letter-spacing: -0.025em;
-}
-
-.view-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.header-update-button {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-height: 2rem;
-  padding: 0.35rem 0.75rem;
-  border: 1px solid rgba(var(--primary-color-rgb), 0.18);
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(var(--primary-color-rgb), 0.08) 0%, rgba(var(--primary-color-rgb), 0.12) 100%);
-  color: var(--primary-color);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1;
-  cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
-  box-shadow: 0 8px 18px rgba(var(--primary-color-rgb), 0.12);
-}
-
-.header-update-button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  border-color: rgba(var(--primary-color-rgb), 0.28);
-  box-shadow: 0 10px 22px rgba(var(--primary-color-rgb), 0.16);
-}
-
-.header-update-button:disabled {
-  cursor: wait;
-  opacity: 0.72;
-}
-
-.header-update-button.ready {
-  border-color: rgba(16, 185, 129, 0.22);
-  background: linear-gradient(180deg, rgba(16, 185, 129, 0.1) 0%, rgba(16, 185, 129, 0.14) 100%);
-  color: #047857;
-  box-shadow: 0 8px 18px rgba(16, 185, 129, 0.14);
-}
-
-.header-update-icon {
-  flex-shrink: 0;
-}
-
-.header-update-button.downloading .header-update-icon {
-  animation: header-update-bob 1.2s ease-in-out infinite;
-}
-
-@keyframes header-update-bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(1px);
-  }
 }
 
 /* 标签页导航 */
@@ -1404,24 +1276,6 @@ const emit = defineEmits<{
     color: #cbd5e1;
   }
 
-  .header-update-button {
-    border-color: rgba(96, 165, 250, 0.2);
-    background: linear-gradient(180deg, rgba(96, 165, 250, 0.12) 0%, rgba(96, 165, 250, 0.18) 100%);
-    color: #bfdbfe;
-    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.24);
-  }
-
-  .header-update-button:hover:not(:disabled) {
-    border-color: rgba(147, 197, 253, 0.32);
-    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.3);
-  }
-
-  .header-update-button.ready {
-    border-color: rgba(16, 185, 129, 0.24);
-    background: linear-gradient(180deg, rgba(16, 185, 129, 0.14) 0%, rgba(16, 185, 129, 0.2) 100%);
-    color: #86efac;
-  }
-
   .update-badge,
   .update-version-chip {
     background-color: rgba(96, 165, 250, 0.16);
@@ -1460,15 +1314,6 @@ const emit = defineEmits<{
 
   .view-title {
     font-size: 1.5rem;
-  }
-
-  .view-title-row {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .header-update-button {
-    width: fit-content;
   }
 
   .tabs-nav {

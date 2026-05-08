@@ -110,24 +110,27 @@ detect_signing_identity || true
 detect_notarization || true
 configure_updater_artifacts
 
-log 2 "Building shared frontend and CLI assets"
+log 2 "Syncing version metadata"
+npm run sync:version
+
+log 3 "Building shared frontend and CLI assets"
 npm run build:cli
 
-log 3 "Building aarch64-apple-darwin bundle"
+log 4 "Building aarch64-apple-darwin bundle"
 if [ ${#TAURI_EXTRA_ARGS[@]} -gt 0 ]; then
   npx tauri build --target aarch64-apple-darwin "${TAURI_BUILD_CONFIG_ARGS[@]}" "${TAURI_EXTRA_ARGS[@]}"
 else
   npx tauri build --target aarch64-apple-darwin "${TAURI_BUILD_CONFIG_ARGS[@]}"
 fi
 
-log 4 "Building x86_64-apple-darwin bundle"
+log 5 "Building x86_64-apple-darwin bundle"
 if [ ${#TAURI_EXTRA_ARGS[@]} -gt 0 ]; then
   npx tauri build --target x86_64-apple-darwin "${TAURI_BUILD_CONFIG_ARGS[@]}" "${TAURI_EXTRA_ARGS[@]}"
 else
   npx tauri build --target x86_64-apple-darwin "${TAURI_BUILD_CONFIG_ARGS[@]}"
 fi
 
-log 5 "Collecting bundle artifacts"
+log 6 "Collecting bundle artifacts"
 AARCH64_BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle"
 X86_64_BUNDLE="src-tauri/target/x86_64-apple-darwin/release/bundle"
 
@@ -141,6 +144,6 @@ copy_if_exists "$X86_64_BUNDLE/macos" '*.app.tar.gz' 'x86_64 app tarball'
 copy_if_exists "$AARCH64_BUNDLE/macos" '*.sig' 'aarch64 signatures'
 copy_if_exists "$X86_64_BUNDLE/macos" '*.sig' 'x86_64 signatures'
 
-log 6 "Done"
+log 7 "Done"
 echo "Artifacts collected in: $STAGING_DIR"
 ls -lh "$STAGING_DIR"
