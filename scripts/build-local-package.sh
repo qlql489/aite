@@ -184,6 +184,12 @@ prepare_macos_artifacts() {
 prepare_windows_artifacts() {
   copy_first_match "$BUNDLE_DIR/msi" '*.msi' "$STAGING_DIR/Aite-v${VERSION}-Windows.msi" \
     || fail "未找到 Windows MSI 安装包"
+  local msi_sig="$BUNDLE_DIR/msi"/*.msi.sig
+  if ls $msi_sig >/dev/null 2>&1; then
+    cp $msi_sig "$STAGING_DIR/Aite-v${VERSION}-Windows.msi.sig"
+  else
+    copy_all_matches "$BUNDLE_DIR/msi" '*.sig'
+  fi
   copy_all_matches "$BUNDLE_DIR/nsis" '*.exe'
 }
 
