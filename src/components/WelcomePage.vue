@@ -39,6 +39,14 @@ defineProps<Props>();
           <span>支持多任务并行执行</span>
         </div>
         <div class="tip-item">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M7 5L3.5 8.5L7 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M13 8L16.5 11.5L13 15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M8.5 14L11.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span>工具调用过程清晰可见</span>
+        </div>
+        <div class="tip-item">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
             <path d="M10 2L10 18M2 10L18 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>

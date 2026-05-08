@@ -216,13 +216,16 @@ fi
 
 configure_updater_artifacts
 
-log 2 "Building shared CLI assets"
+log 2 "Syncing version metadata"
+npm run sync:version
+
+log 3 "Building shared CLI assets"
 npm run build:cli
 
-log 3 "Building installer bundles"
+log 4 "Building installer bundles"
 run_tauri_build
 
-log 4 "Collecting artifacts"
+log 5 "Collecting artifacts"
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
 
@@ -238,6 +241,6 @@ case "$PLATFORM" in
     ;;
 esac
 
-log 5 "Done"
+log 6 "Done"
 echo "Artifacts collected in: $STAGING_DIR"
 ls -lh "$STAGING_DIR"

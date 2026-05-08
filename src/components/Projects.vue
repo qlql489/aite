@@ -4,9 +4,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Store } from '@tauri-apps/plugin-store';
 import { open } from '@tauri-apps/plugin-dialog';
+import { storeToRefs } from 'pinia';
 import { useSlashesStore } from '../stores/slashes';
 import { useClaudeStore } from '../stores/claude';
 import { useProviderStore } from '../stores/provider';
+import { useUpdaterStore } from '../stores/updater';
 import { HugeiconsIcon } from '@hugeicons/vue';
 import { FolderIcon, AddIcon, RefreshIcon, FileImportIcon, Settings01Icon, Search01Icon } from '@hugeicons/core-free-icons';
 import ImportProjectsDialog from './ImportProjectsDialog.vue';
@@ -36,6 +38,13 @@ import { buildRewindSummary, parseRewindTurns, type RewindAction, type RewindTur
 const slashesStore = useSlashesStore();
 const claudeStore = useClaudeStore();
 const providerStore = useProviderStore();
+const updaterStore = useUpdaterStore();
+const {
+  isEnabled: autoUpdateEnabled,
+  updateVersion,
+  status: updateStatus,
+  progress: updateProgress,
+} = storeToRefs(updaterStore);
 
 // Session 类型定义（与后端 Rust 结构体匹配）
 interface Session {
@@ -513,6 +522,31 @@ const projectSortMode = ref<'project' | 'time' | 'chat'>('project');
 const isProjectSortMenuOpen = ref(false);
 const projectSortMenuRef = ref<HTMLElement | null>(null);
 const projectSortButtonRef = ref<HTMLElement | null>(null);
+
+const showSidebarUpdateAction = computed(() =>
+  autoUpdateEnabled.value &&
+  (updateStatus.value === 'available'
+    || updateStatus.value === 'downloading'
+    || updateStatus.value === 'ready')
+);
+
+const sidebarUpdateLabel = computed(() => {
+  if (updateStatus.value === 'downloading') {
+    return `${updateProgress.value}%`;
+  }
+
+  if (updateStatus.value === 'ready') {
+    return '重启';
+  }
+
+  if (updateVersion.value) {
+    return `v${updateVersion.value}`;
+  }
+
+  return '下载更新';
+});
+
+const isSidebarUpdateBusy = computed(() => updateStatus.value === 'checking' || updateStatus.value === 'downloading');
 
 const projectSortOptions = [
   { value: 'project' as const, label: '按项目' },
@@ -3596,6 +3630,10 @@ const getConversationStatusDotTitle = (conv: Conversation) => {
   return getConnectionStatusText(getConversationConnectionStatus(conv));
 };
 
+async function handleSidebarUpdateAction() {
+  await updaterStore.performPrimaryAction();
+}
+
 // 播放完成提示音
 const playCompletionSound = () => {
   try {
@@ -3628,6 +3666,8 @@ onMounted(async () => {
   } catch (error) {
     console.error('读取应用版本失败:', error);
   }
+
+  await updaterStore.initializeVersion();
 
   window.addEventListener('keydown', handleWindowSearchShortcut);
   window.addEventListener('resize', syncWorkspacePanelWidth);
@@ -5244,6 +5284,46 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
           <HugeiconsIcon :icon="Settings01Icon" class="settings-entry-icon" />
           <span class="settings-entry-label">设置</span>
         </button>
+        <button
+          v-if="showSidebarUpdateAction"
+          class="sidebar-update-button"
+          :class="{
+            downloading: updateStatus === 'downloading',
+            ready: updateStatus === 'ready',
+          }"
+          :disabled="isSidebarUpdateBusy || !autoUpdateEnabled"
+          @click="handleSidebarUpdateAction"
+        >
+          <svg
+            class="sidebar-update-icon"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 4.5V14.5"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+            />
+            <path
+              d="M8 10.75L12 14.75L16 10.75"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <path
+              d="M5 18.25H19"
+              stroke="currentColor"
+              stroke-width="1.9"
+              stroke-linecap="round"
+            />
+          </svg>
+          <span>{{ sidebarUpdateLabel }}</span>
+        </button>
         <span class="settings-entry-version">v{{ appVersion }}</span>
       </div>
 
@@ -5785,6 +5865,61 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
   font-size: 0.75rem;
   color: var(--text-muted, #9ca3af);
   flex-shrink: 0;
+}
+
+.sidebar-update-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.9rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid rgba(var(--primary-color-rgb), 0.16);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(var(--primary-color-rgb), 0.06) 0%, rgba(var(--primary-color-rgb), 0.1) 100%);
+  color: var(--primary-color, #3b82f6);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, opacity 0.18s ease;
+  box-shadow: 0 6px 14px rgba(var(--primary-color-rgb), 0.1);
+}
+
+.sidebar-update-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(var(--primary-color-rgb), 0.24);
+  box-shadow: 0 8px 18px rgba(var(--primary-color-rgb), 0.14);
+}
+
+.sidebar-update-button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.sidebar-update-button.ready {
+  border-color: rgba(16, 185, 129, 0.2);
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.08) 0%, rgba(16, 185, 129, 0.12) 100%);
+  color: #047857;
+  box-shadow: 0 6px 14px rgba(16, 185, 129, 0.12);
+}
+
+.sidebar-update-icon {
+  flex-shrink: 0;
+}
+
+.sidebar-update-button.downloading .sidebar-update-icon {
+  animation: sidebar-update-bob 1.2s ease-in-out infinite;
+}
+
+@keyframes sidebar-update-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(1px);
+  }
 }
 
 .projects-list::-webkit-scrollbar {
@@ -7189,6 +7324,24 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
 
   .settings-entry-version {
     color: #9ca3af;
+  }
+
+  .sidebar-update-button {
+    border-color: rgba(96, 165, 250, 0.2);
+    background: linear-gradient(180deg, rgba(96, 165, 250, 0.1) 0%, rgba(96, 165, 250, 0.16) 100%);
+    color: #bfdbfe;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.24);
+  }
+
+  .sidebar-update-button:hover:not(:disabled) {
+    border-color: rgba(147, 197, 253, 0.32);
+    box-shadow: 0 10px 20px rgba(15, 23, 42, 0.3);
+  }
+
+  .sidebar-update-button.ready {
+    border-color: rgba(16, 185, 129, 0.24);
+    background: linear-gradient(180deg, rgba(16, 185, 129, 0.12) 0%, rgba(16, 185, 129, 0.18) 100%);
+    color: #86efac;
   }
 
   .projects-view {
