@@ -238,6 +238,71 @@ const hasMoreLines = computed(() => {
   return diffLines.value.length > maxDisplayLines;
 });
 
+function tryParseJsonLike(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeToolResult(value?: string): string {
+  if (!value) return '';
+
+  let current: unknown = value;
+
+  for (let i = 0; i < 4; i++) {
+    if (typeof current !== 'string') break;
+
+    const parsed = tryParseJsonLike(current.trim());
+    if (parsed == null) break;
+    current = parsed;
+  }
+
+  if (Array.isArray(current)) {
+    const textParts = current
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const record = item as Record<string, unknown>;
+          if (record.type === 'text' && typeof record.text === 'string') {
+            return record.text;
+          }
+          if (typeof record.content === 'string') {
+            return record.content;
+          }
+          if (typeof record.text === 'string') {
+            return record.text;
+          }
+        }
+        return '';
+      })
+      .filter(Boolean);
+
+    if (textParts.length > 0) {
+      return normalizeToolResult(textParts.join(''));
+    }
+  }
+
+  if (current && typeof current === 'object') {
+    const record = current as Record<string, unknown>;
+
+    if (typeof record.content === 'string') {
+      return normalizeToolResult(record.content);
+    }
+
+    if (typeof record.text === 'string') {
+      return normalizeToolResult(record.text);
+    }
+
+    return JSON.stringify(record, null, 2);
+  }
+
+  return typeof current === 'string' ? current : String(current ?? '');
+}
+
+const normalizedResult = computed(() => normalizeToolResult(props.result));
+
 interface ReadLine {
   lineNumber: string;
   content: string;
@@ -246,7 +311,7 @@ interface ReadLine {
 const readLines = computed<ReadLine[]>(() => {
   if (!isReadTool.value || !props.result) return [];
 
-  return props.result.split('\n').map((line) => {
+  return normalizedResult.value.split('\n').map((line) => {
     const match = line.match(/^(\d+)([-:|])?(.*)$/);
     if (!match) {
       return { lineNumber: '', content: line };
@@ -360,14 +425,14 @@ const statusStyle = computed(() => {
         <!-- 用户选择结果 -->
         <div v-if="result || pendingAnswers?.[qItem.question]" class="question-result">
           <div class="result-header">用户选择</div>
-          <pre class="result-content">{{ result || pendingAnswers?.[qItem.question] }}</pre>
+          <pre class="result-content">{{ normalizedResult || pendingAnswers?.[qItem.question] }}</pre>
         </div>
       </div>
     </template>
 
     <!-- Diff 内容 -->
     <div v-else-if="shouldShowErrorResult" :class="['plain-result', { error: isError }]">
-      <pre>{{ result }}</pre>
+      <pre>{{ normalizedResult }}</pre>
     </div>
 
     <div
@@ -411,11 +476,11 @@ const statusStyle = computed(() => {
         <pre v-if="persistedOutputInfo" class="persisted-path">{{ persistedOutputInfo.filePath }}</pre>
         <details class="persisted-preview">
           <summary>预览前 2KB</summary>
-          <pre>{{ result }}</pre>
+          <pre>{{ normalizedResult }}</pre>
         </details>
       </div>
       <!-- 普通输出 -->
-      <pre v-else>{{ result }}</pre>
+      <pre v-else>{{ normalizedResult }}</pre>
     </div>
 
     <!-- 无结果提示 -->

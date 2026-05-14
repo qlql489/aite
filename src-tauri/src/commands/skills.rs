@@ -5,6 +5,7 @@
 // - ~/.claude/skills/ - Global skills (source: "global")
 // - ~/.agents/skills/ - Installed skills (source: "installed")
 // - ~/.claude/plugins/marketplaces/*/plugins/*/commands/ - Plugin commands (source: "plugin")
+// - ~/.claude/plugins/marketplaces/*/plugins/*/skills/ - Plugin skills (source: "plugin")
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -108,6 +109,40 @@ fn get_plugin_commands_dirs() -> Vec<(PathBuf, String)> {
     dirs
 }
 
+// Plugin skills: ~/.claude/plugins/marketplaces/*/plugins/*/skills/
+// 返回 (skills_dir, plugin_name) 元组
+fn get_plugin_skills_dirs() -> Vec<(PathBuf, String)> {
+    let mut dirs = Vec::new();
+
+    if let Some(home) = get_home_dir() {
+        let marketplaces_dir = home.join(".claude").join("plugins").join("marketplaces");
+        if !marketplaces_dir.exists() {
+            return dirs;
+        }
+
+        if let Ok(marketplaces) = fs::read_dir(&marketplaces_dir) {
+            for marketplace in marketplaces.flatten() {
+                let plugins_dir = marketplace.path().join("plugins");
+                if !plugins_dir.exists() {
+                    continue;
+                }
+
+                if let Ok(plugins) = fs::read_dir(&plugins_dir) {
+                    for plugin in plugins.flatten() {
+                        let skills_dir = plugin.path().join("skills");
+                        if skills_dir.exists() {
+                            let plugin_name = plugin.file_name().to_string_lossy().to_string();
+                            dirs.push((skills_dir, plugin_name));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    dirs
+}
+
 fn scan_directory(dir: &PathBuf, source: &str, plugin_name: Option<&str>) -> Vec<SkillFile> {
     let mut skills = Vec::new();
     if !dir.exists() {
@@ -191,7 +226,7 @@ fn scan_installed_skills(dir: &PathBuf, installed_source: &str) -> Vec<SkillFile
     skills
 }
 
-fn scan_skills_directory(dir: &PathBuf, source: &str) -> Vec<SkillFile> {
+fn scan_skills_directory(dir: &PathBuf, source: &str, plugin_name: Option<&str>) -> Vec<SkillFile> {
     let mut skills = Vec::new();
     if !dir.exists() {
         return skills;
@@ -220,11 +255,11 @@ fn scan_skills_directory(dir: &PathBuf, source: &str) -> Vec<SkillFile> {
                             source_type: source.to_string(),
                             installed_source: None,
                             file_path: skill_md.to_string_lossy().to_string(),
-                            plugin_name: None,
+                            plugin_name: plugin_name.map(|s| s.to_string()),
                         });
                     }
                 } else {
-                    skills.extend(scan_skills_directory(&path, source));
+                    skills.extend(scan_skills_directory(&path, source, plugin_name));
                 }
                 continue;
             }
@@ -242,7 +277,7 @@ fn scan_skills_directory(dir: &PathBuf, source: &str) -> Vec<SkillFile> {
                         source_type: source.to_string(),
                         installed_source: None,
                         file_path: path.to_string_lossy().to_string(),
-                        plugin_name: None,
+                        plugin_name: plugin_name.map(|s| s.to_string()),
                     });
                 }
             }
@@ -362,7 +397,7 @@ pub fn get_skills(workspace_path: Option<String>) -> Result<AllSkillsResponse, S
 
         return Ok(AllSkillsResponse {
             commands: scan_directory(&commands_dir, "project", None),
-            skills: scan_skills_directory(&skills_dir, "project"),
+            skills: scan_skills_directory(&skills_dir, "project", None),
         });
     }
 
@@ -386,10 +421,21 @@ pub fn get_skills(workspace_path: Option<String>) -> Result<AllSkillsResponse, S
 
     // Skills
     let global_skills_dir = get_global_skills_dir();
-    let global_skills = scan_skills_directory(&global_skills_dir, "global");
+    let installed_skills_dir = get_installed_skills_dir();
+    let plugin_skills_dirs = get_plugin_skills_dirs();
+
+    let global_skills = scan_skills_directory(&global_skills_dir, "global", None);
+    let installed_skills = scan_installed_skills(&installed_skills_dir, "agents");
+
+    let mut plugin_skills = Vec::new();
+    for (dir, plugin_name) in plugin_skills_dirs {
+        plugin_skills.extend(scan_skills_directory(&dir, "plugin", Some(&plugin_name)));
+    }
 
     let mut all_skills = Vec::new();
     all_skills.extend(global_skills);
+    all_skills.extend(installed_skills);
+    all_skills.extend(plugin_skills);
 
     Ok(AllSkillsResponse {
         commands: all_commands,
