@@ -240,7 +240,9 @@ fn login_shell_extra_path() -> &'static str {
     CACHE.get_or_init(|| {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
         let output = Command::new(&shell)
-            .args(["-l", "-c", "echo $PATH"])
+            // Use an interactive login shell so PATH setup in ~/.zshrc and similar
+            // matches what users see in a normal terminal session.
+            .args(["-i", "-l", "-c", "echo $PATH"])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
