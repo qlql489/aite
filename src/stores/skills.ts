@@ -48,6 +48,7 @@ export const useSkillsStore = defineStore('skills', () => {
       global: [],
       project: [],
       installed: [],
+      plugin: [],
     };
     for (const skill of skills.value) {
       if (grouped[skill.source]) {

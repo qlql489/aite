@@ -184,6 +184,21 @@ const commandsBySource = computed(() => {
   return grouped;
 });
 
+const skillsBySource = computed(() => {
+  const grouped: Record<string, SkillFile[]> = {
+    project: [],
+    global: [],
+    installed: [],
+    plugin: [],
+  };
+  for (const skill of filteredSkills.value) {
+    if (grouped[skill.source]) {
+      grouped[skill.source].push(skill);
+    }
+  }
+  return grouped;
+});
+
 const filteredSkillTree = computed(() => {
   if (!skillTreeData.value) return [] as ProjectTreeNode[];
   const normalized = skillTreeQuery.value.trim().toLowerCase();
@@ -242,6 +257,9 @@ const projectCommandGroupLabel = computed(() => (
   isWorkspaceMode.value ? 'WORKSPACE' : 'PROJECT'
 ));
 const isAnyPanelResizing = computed(() => activeResizeTarget.value !== null);
+const isSelectedSkillReadOnly = computed(() => (
+  selectedSkill.value?.source === 'plugin'
+));
 
 const RESIZE_HANDLE_WIDTH = 10;
 const PANEL_WIDTH_CONSTRAINTS = {
@@ -1293,6 +1311,10 @@ function requestDeleteCommand(command: SkillFile) {
 }
 
 function requestDeleteSkill(skill: SkillFile) {
+  if (skill.source === 'plugin' || skill.source === 'installed') {
+    return;
+  }
+
   pendingDeleteType.value = 'skill';
   pendingDeleteItem.value = skill;
   showDeleteConfirmDialog.value = true;
@@ -1345,6 +1367,7 @@ async function confirmDelete() {
 // 保存 Skill
 async function saveSkill() {
   if (!selectedSkill.value || !selectedSkillTreeFile.value || !selectedSkillRootPath.value) return;
+  if (selectedSkill.value.source === 'plugin') return;
   skillSaving.value = true;
   try {
     await invoke<ProjectFileResponse>('write_project_file', {
@@ -2008,23 +2031,77 @@ onBeforeUnmount(() => {
                 </button>
               </div>
 
-              <div v-for="skill in filteredSkills" :key="skill.filePath"
-                :class="['skill-item', { selected: selectedSkill?.filePath === skill.filePath }]"
-                @click="selectSkill(skill)"
-              >
-                <HugeiconsIcon :icon="ZapIcon" class="skill-item-icon" />
-                <div class="skill-item-content">
-                  <div class="skill-item-name">/{{ skill.name }}</div>
-                  <div class="skill-item-desc">{{ skill.description || '无描述' }}</div>
-                </div>
-                <button
-                  type="button"
-                  class="skill-delete-btn"
-                  @click.stop.prevent="requestDeleteSkill(skill)"
-                  title="删除技能"
+              <div v-if="skillsBySource.project.length > 0" class="command-group">
+                <div class="group-header">{{ projectCommandGroupLabel }}</div>
+                <div v-for="skill in skillsBySource.project" :key="skill.filePath"
+                  :class="['skill-item', { selected: selectedSkill?.filePath === skill.filePath }]"
+                  @click="selectSkill(skill)"
                 >
-                  <HugeiconsIcon :icon="Delete02Icon" class="icon-xs" />
-                </button>
+                  <HugeiconsIcon :icon="ZapIcon" class="skill-item-icon" />
+                  <div class="skill-item-content">
+                    <div class="skill-item-name">/{{ skill.name }}</div>
+                    <div class="skill-item-desc">{{ skill.description || '无描述' }}</div>
+                  </div>
+                  <button
+                    type="button"
+                    class="skill-delete-btn"
+                    @click.stop.prevent="requestDeleteSkill(skill)"
+                    title="删除技能"
+                  >
+                    <HugeiconsIcon :icon="Delete02Icon" class="icon-xs" />
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="skillsBySource.global.length > 0" class="command-group">
+                <div class="group-header">GLOBAL</div>
+                <div v-for="skill in skillsBySource.global" :key="skill.filePath"
+                  :class="['skill-item', { selected: selectedSkill?.filePath === skill.filePath }]"
+                  @click="selectSkill(skill)"
+                >
+                  <HugeiconsIcon :icon="ZapIcon" class="skill-item-icon" />
+                  <div class="skill-item-content">
+                    <div class="skill-item-name">/{{ skill.name }}</div>
+                    <div class="skill-item-desc">{{ skill.description || '无描述' }}</div>
+                  </div>
+                  <button
+                    type="button"
+                    class="skill-delete-btn"
+                    @click.stop.prevent="requestDeleteSkill(skill)"
+                    title="删除技能"
+                  >
+                    <HugeiconsIcon :icon="Delete02Icon" class="icon-xs" />
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="skillsBySource.installed.length > 0" class="command-group">
+                <div class="group-header">INSTALLED</div>
+                <div v-for="skill in skillsBySource.installed" :key="skill.filePath"
+                  :class="['skill-item', { selected: selectedSkill?.filePath === skill.filePath }]"
+                  @click="selectSkill(skill)"
+                >
+                  <HugeiconsIcon :icon="ZapIcon" class="skill-item-icon" />
+                  <div class="skill-item-content">
+                    <div class="skill-item-name">/{{ skill.name }}</div>
+                    <div class="skill-item-desc">{{ skill.description || '无描述' }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="skillsBySource.plugin.length > 0" class="command-group">
+                <div class="group-header">PLUGINS</div>
+                <div v-for="skill in skillsBySource.plugin" :key="skill.filePath"
+                  :class="['skill-item', { selected: selectedSkill?.filePath === skill.filePath }]"
+                  @click="selectSkill(skill)"
+                >
+                  <HugeiconsIcon :icon="ZapIcon" class="skill-item-icon" />
+                  <div class="skill-item-content">
+                    <div class="skill-item-name">/{{ skill.name }}</div>
+                    <div class="skill-item-desc">{{ skill.description || '无描述' }}</div>
+                    <span v-if="skill.pluginName" class="command-plugin-badge">{{ skill.pluginName }}</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -2042,7 +2119,11 @@ onBeforeUnmount(() => {
               <div class="skill-editor-toolbar">
                 <div class="skill-editor-info">
                   <span class="skill-editor-name">/{{ selectedSkill.name }}</span>
-                  <span :class="['command-source-badge', selectedSkill.source]">{{ selectedSkill.source }}</span>
+                  <span :class="['command-source-badge', selectedSkill.source]">
+                    {{ selectedSkill.source }}
+                    <span v-if="selectedSkill.pluginName">({{ selectedSkill.pluginName }})</span>
+                    <span v-else-if="selectedSkill.installedSource">({{ selectedSkill.installedSource }})</span>
+                  </span>
                 </div>
                 <div class="skill-editor-actions">
                   <!-- View mode toggles -->
@@ -2068,7 +2149,7 @@ onBeforeUnmount(() => {
                   <button
                     class="toolbar-btn save-btn"
                     @click="saveSkill"
-                    :disabled="skillSaving"
+                    :disabled="skillSaving || isSelectedSkillReadOnly"
                   >
                     <HugeiconsIcon v-if="skillSaving" :icon="Loading02Icon" class="icon-sm animate-spin" />
                     <HugeiconsIcon v-else :icon="FloppyDiskIcon" class="icon-sm" />
@@ -2078,6 +2159,7 @@ onBeforeUnmount(() => {
                   <!-- Delete -->
                   <button
                     type="button"
+                    v-if="!isSelectedSkillReadOnly && selectedSkill.source !== 'installed'"
                     class="toolbar-btn"
                     @click.stop.prevent="requestDeleteSkill(selectedSkill)"
                     title="删除技能"
@@ -2198,6 +2280,7 @@ onBeforeUnmount(() => {
                           ref="skillTextareaRef"
                           v-model="skillContent"
                           class="skill-textarea"
+                          :readonly="isSelectedSkillReadOnly"
                           placeholder="Write your skill prompt in Markdown..."
                           @keydown="handleSkillKeyDown"
                           @scroll="handleEditorTextareaScroll('skill', $event)"
@@ -2266,6 +2349,7 @@ onBeforeUnmount(() => {
                             ref="skillTextareaRef"
                             v-model="skillContent"
                             class="skill-textarea"
+                            :readonly="isSelectedSkillReadOnly"
                             placeholder="Write your skill prompt in Markdown..."
                             @keydown="handleSkillKeyDown"
                             @scroll="handleEditorTextareaScroll('skill', $event)"
@@ -4264,6 +4348,8 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  width: 100%;
+  min-width: 0;
 }
 
 .command-editor-toolbar {
@@ -4313,9 +4399,12 @@ onBeforeUnmount(() => {
 
 .command-editor-content {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
 }
 
 .command-editor-actions {
@@ -4326,16 +4415,23 @@ onBeforeUnmount(() => {
 }
 
 .command-textarea-wrapper {
+  flex: 1;
   height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
 }
 
 .editor-textarea-surface {
   position: relative;
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
   background-color: var(--bg-primary, #ffffff);
 }
 
@@ -4374,9 +4470,13 @@ onBeforeUnmount(() => {
 }
 
 .command-textarea {
+  display: block;
   width: 100%;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  max-width: none;
   padding: 1rem;
   border: none;
   resize: none;
@@ -4395,14 +4495,19 @@ onBeforeUnmount(() => {
 }
 
 .command-preview {
+  flex: 1;
   height: 100%;
   overflow-y: auto;
   padding: 1rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   background-color: var(--bg-primary, #ffffff);
 }
 
 .command-preview-content {
-  max-width: 65ch;
+  width: 100%;
+  max-width: none;
 }
 
 .command-preview-placeholder {
@@ -4415,15 +4520,21 @@ onBeforeUnmount(() => {
 .command-split {
   display: flex;
   height: 100%;
+  width: 100%;
+  min-width: 0;
 }
 
 .command-split .command-textarea-wrapper {
-  width: 50%;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
   border-right: 1px solid var(--border-color, #e5e7eb);
 }
 
 .command-split .command-preview {
-  width: 50%;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
 }
 
 .editor-find-bar {
@@ -4712,6 +4823,8 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  width: 100%;
+  min-width: 0;
 }
 
 .skill-editor-toolbar {
@@ -4805,12 +4918,18 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
 }
 
 .skill-editor-layout {
   display: flex;
   height: 100%;
   min-height: 0;
+  width: 100%;
+  min-width: 0;
   gap: 0.375rem;
 }
 
@@ -4904,16 +5023,23 @@ onBeforeUnmount(() => {
 }
 
 .skill-textarea-wrapper {
+  flex: 1;
   height: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
 }
 
 .skill-textarea {
+  display: block;
   width: 100%;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
+  max-width: none;
   padding: 1rem;
   border: none;
   resize: none;
@@ -4932,14 +5058,19 @@ onBeforeUnmount(() => {
 }
 
 .skill-preview {
+  flex: 1;
   height: 100%;
   overflow-y: auto;
   padding: 1rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   background-color: var(--bg-primary, #ffffff);
 }
 
 .skill-preview-content {
-  max-width: 65ch;
+  width: 100%;
+  max-width: none;
 }
 
 .skill-preview-placeholder {
@@ -4956,15 +5087,21 @@ onBeforeUnmount(() => {
 .skill-split {
   display: flex;
   height: 100%;
+  width: 100%;
+  min-width: 0;
 }
 
 .skill-split .skill-textarea-wrapper {
-  width: 50%;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
   border-right: 1px solid var(--border-color, #e5e7eb);
 }
 
 .skill-split .skill-preview {
-  width: 50%;
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
 }
 
 .skill-editor-footer {
