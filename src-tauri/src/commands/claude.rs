@@ -842,12 +842,17 @@ async fn run_rewind_files_cli(
 
     let claude_bin = find_claude_binary_for_rewind()?;
     let runtime_env = crate::commands::cli::resolve_claude_runtime_env(Path::new(&claude_bin))?;
-    let output = Command::new(&claude_bin)
+    let mut command = Command::new(&claude_bin);
+    command
         .args(["--resume", session_id, "--rewind-files", checkpoint_uuid])
         .current_dir(cwd)
         .env("PATH", &runtime_env.path)
         .env("CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING", "1")
-        .env_remove("CLAUDECODE")
+        .env_remove("CLAUDECODE");
+    for (key, value) in &runtime_env.inherited_env {
+        command.env(key, value);
+    }
+    let output = command
         .output()
         .await
         .map_err(|e| format!("Failed to run claude --rewind-files: {}", e))?;

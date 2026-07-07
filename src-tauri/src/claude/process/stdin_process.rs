@@ -239,6 +239,15 @@ impl StdinProcessManager {
             .filter(|(key, _)| should_log_env_key(key))
             .collect();
         cmd.env_remove("CLAUDECODE");
+        for (key, value) in &runtime_env.inherited_env {
+            cmd.env(key, value);
+            if should_log_env_key(key)
+                || key.starts_with("AITE_LOGIN_SHELL_")
+                || key.starts_with("CONDA_")
+            {
+                effective_env_vars.insert(key.clone(), value.clone());
+            }
+        }
 
         if let Some(ref node_path) = runtime_env.node_path {
             info!("   Runtime Node.js: {}", node_path);

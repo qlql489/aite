@@ -476,16 +476,26 @@ impl StdinSessionManager {
                                                 let _ = app.emit(EVENT_SUBAGENT_TOOL_USE, payload);
                                             }
                                             FrontendSubagentEvent::ToolInputDelta(payload) => {
-                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_INPUT_DELTA, payload);
+                                                let _ = app
+                                                    .emit(EVENT_SUBAGENT_TOOL_INPUT_DELTA, payload);
                                             }
                                             FrontendSubagentEvent::ToolResultStart(payload) => {
-                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_RESULT_START, payload);
+                                                let _ = app.emit(
+                                                    EVENT_SUBAGENT_TOOL_RESULT_START,
+                                                    payload,
+                                                );
                                             }
                                             FrontendSubagentEvent::ToolResultDelta(payload) => {
-                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_RESULT_DELTA, payload);
+                                                let _ = app.emit(
+                                                    EVENT_SUBAGENT_TOOL_RESULT_DELTA,
+                                                    payload,
+                                                );
                                             }
                                             FrontendSubagentEvent::ToolResultComplete(payload) => {
-                                                let _ = app.emit(EVENT_SUBAGENT_TOOL_RESULT_COMPLETE, payload);
+                                                let _ = app.emit(
+                                                    EVENT_SUBAGENT_TOOL_RESULT_COMPLETE,
+                                                    payload,
+                                                );
                                             }
                                         }
                                     }
@@ -1310,15 +1320,13 @@ impl StdinSessionManager {
             .and_then(|value| value.as_u64());
 
         match event_type {
-            Some("content_block_start") => {
-                Self::translate_subagent_content_block_start(
-                    &stream_event.session_id,
-                    &parent_tool_use_id,
-                    index,
-                    stream_event.event.get("content_block"),
-                    state,
-                )
-            }
+            Some("content_block_start") => Self::translate_subagent_content_block_start(
+                &stream_event.session_id,
+                &parent_tool_use_id,
+                index,
+                stream_event.event.get("content_block"),
+                state,
+            ),
             Some("content_block_delta") => Self::translate_subagent_content_block_delta(
                 &stream_event.session_id,
                 &parent_tool_use_id,
@@ -1354,11 +1362,12 @@ impl StdinSessionManager {
         };
 
         match block_type {
-            "tool_use" => {
+            "tool_use" | "server_tool_use" => {
                 let Some(tool_use_id) = content_block
                     .get("id")
                     .and_then(|value| value.as_str())
-                    .map(|value| value.to_string()) else {
+                    .map(|value| value.to_string())
+                else {
                     return Vec::new();
                 };
                 let tool_name = content_block
@@ -1367,10 +1376,9 @@ impl StdinSessionManager {
                     .map(|value| value.to_string());
                 let input = content_block.get("input").cloned();
 
-                state.tool_use_ids_by_index.insert(
-                    (session_id.to_string(), index),
-                    tool_use_id.clone(),
-                );
+                state
+                    .tool_use_ids_by_index
+                    .insert((session_id.to_string(), index), tool_use_id.clone());
 
                 vec![FrontendSubagentEvent::ToolUse(SubagentToolUsePayload {
                     session_id: session_id.to_string(),
@@ -1385,13 +1393,13 @@ impl StdinSessionManager {
                 let Some(tool_use_id) = content_block
                     .get("tool_use_id")
                     .and_then(|value| value.as_str())
-                    .map(|value| value.to_string()) else {
+                    .map(|value| value.to_string())
+                else {
                     return Vec::new();
                 };
-                state.tool_result_ids_by_index.insert(
-                    (session_id.to_string(), index),
-                    tool_use_id.clone(),
-                );
+                state
+                    .tool_result_ids_by_index
+                    .insert((session_id.to_string(), index), tool_use_id.clone());
 
                 let content = Self::tool_result_content_to_string(content_block.get("content"));
                 if content.is_empty() {
@@ -1439,13 +1447,15 @@ impl StdinSessionManager {
                 let Some(tool_use_id) = state
                     .tool_use_ids_by_index
                     .get(&(session_id.to_string(), index))
-                    .cloned() else {
+                    .cloned()
+                else {
                     return Vec::new();
                 };
                 let Some(partial_json) = delta
                     .get("partial_json")
                     .and_then(|value| value.as_str())
-                    .map(|value| value.to_string()) else {
+                    .map(|value| value.to_string())
+                else {
                     return Vec::new();
                 };
 
@@ -1462,13 +1472,15 @@ impl StdinSessionManager {
                 let Some(tool_use_id) = state
                     .tool_result_ids_by_index
                     .get(&(session_id.to_string(), index))
-                    .cloned() else {
+                    .cloned()
+                else {
                     return Vec::new();
                 };
                 let Some(text) = delta
                     .get("text")
                     .and_then(|value| value.as_str())
-                    .map(|value| value.to_string()) else {
+                    .map(|value| value.to_string())
+                else {
                     return Vec::new();
                 };
 
@@ -1574,7 +1586,8 @@ impl StdinSessionManager {
                         media_source: None,
                     });
                 }
-                ContentBlock::ToolUse { id, name, input } => {
+                ContentBlock::ToolUse { id, name, input }
+                | ContentBlock::ServerToolUse { id, name, input } => {
                     // Store complete tool_use info including id, name and input
                     let tool_use_info = serde_json::json!({
                         "id": id,
@@ -1837,8 +1850,7 @@ mod tests {
             }),
         );
 
-        let start =
-            StdinSessionManager::translate_subagent_stream_event(&start_event, &mut state);
+        let start = StdinSessionManager::translate_subagent_stream_event(&start_event, &mut state);
         assert_eq!(
             start,
             vec![FrontendSubagentEvent::ToolResultStart(
@@ -1865,8 +1877,7 @@ mod tests {
             }),
         );
 
-        let delta =
-            StdinSessionManager::translate_subagent_stream_event(&delta_event, &mut state);
+        let delta = StdinSessionManager::translate_subagent_stream_event(&delta_event, &mut state);
         assert_eq!(
             delta,
             vec![FrontendSubagentEvent::ToolResultDelta(

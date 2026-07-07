@@ -3,6 +3,7 @@
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -234,15 +235,37 @@ fn get_local_node_bin_dir() -> Option<PathBuf> {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LoginShellSnapshot {
+    pub path: String,
+    pub python: Option<String>,
+    pub python3: Option<String>,
+    pub pip: Option<String>,
+    pub pip3: Option<String>,
+    pub conda_prefix: Option<String>,
+    pub conda_default_env: Option<String>,
+    pub conda_shlvl: Option<String>,
+}
+
 #[cfg(not(target_os = "windows"))]
-fn login_shell_extra_path() -> &'static str {
-    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+fn login_shell_snapshot() -> &'static LoginShellSnapshot {
+    static CACHE: std::sync::OnceLock<LoginShellSnapshot> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let script = r#"
+echo "__AITE_PATH__=$PATH"
+echo "__AITE_PYTHON__=$(command -v python 2>/dev/null || true)"
+echo "__AITE_PYTHON3__=$(command -v python3 2>/dev/null || true)"
+echo "__AITE_PIP__=$(command -v pip 2>/dev/null || true)"
+echo "__AITE_PIP3__=$(command -v pip3 2>/dev/null || true)"
+echo "__AITE_CONDA_PREFIX__=${CONDA_PREFIX:-}"
+echo "__AITE_CONDA_DEFAULT_ENV__=${CONDA_DEFAULT_ENV:-}"
+echo "__AITE_CONDA_SHLVL__=${CONDA_SHLVL:-}"
+"#;
         let output = Command::new(&shell)
             // Use an interactive login shell so PATH setup in ~/.zshrc and similar
             // matches what users see in a normal terminal session.
-            .args(["-i", "-l", "-c", "echo $PATH"])
+            .args(["-i", "-l", "-c", script])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -250,9 +273,54 @@ fn login_shell_extra_path() -> &'static str {
 
         match output {
             Ok(output) if output.status.success() => {
-                String::from_utf8_lossy(&output.stdout).trim().to_string()
+                let text = String::from_utf8_lossy(&output.stdout);
+                let mut entries = HashMap::new();
+                for line in text.lines() {
+                    if let Some((key, value)) = line.split_once('=') {
+                        entries.insert(key.trim().to_string(), value.trim().to_string());
+                    }
+                }
+
+                let snapshot = LoginShellSnapshot {
+                    path: entries.remove("__AITE_PATH__").unwrap_or_default(),
+                    python: entries
+                        .remove("__AITE_PYTHON__")
+                        .filter(|value| !value.is_empty()),
+                    python3: entries
+                        .remove("__AITE_PYTHON3__")
+                        .filter(|value| !value.is_empty()),
+                    pip: entries
+                        .remove("__AITE_PIP__")
+                        .filter(|value| !value.is_empty()),
+                    pip3: entries
+                        .remove("__AITE_PIP3__")
+                        .filter(|value| !value.is_empty()),
+                    conda_prefix: entries
+                        .remove("__AITE_CONDA_PREFIX__")
+                        .filter(|value| !value.is_empty()),
+                    conda_default_env: entries
+                        .remove("__AITE_CONDA_DEFAULT_ENV__")
+                        .filter(|value| !value.is_empty()),
+                    conda_shlvl: entries
+                        .remove("__AITE_CONDA_SHLVL__")
+                        .filter(|value| !value.is_empty()),
+                };
+
+                tracing::info!(
+                    "登录 shell 运行快照: path={}, python={:?}, python3={:?}, pip={:?}, pip3={:?}, conda_prefix={:?}, conda_default_env={:?}, conda_shlvl={:?}",
+                    snapshot.path,
+                    snapshot.python,
+                    snapshot.python3,
+                    snapshot.pip,
+                    snapshot.pip3,
+                    snapshot.conda_prefix,
+                    snapshot.conda_default_env,
+                    snapshot.conda_shlvl
+                );
+
+                snapshot
             }
-            _ => String::new(),
+            _ => LoginShellSnapshot::default(),
         }
     })
 }
@@ -279,6 +347,25 @@ pub(crate) fn build_enriched_path() -> String {
 
     let mut paths = Vec::new();
     let mut seen = std::collections::HashSet::new();
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(conda_prefix) = &login_shell_snapshot().conda_prefix {
+            let conda_bin = Path::new(conda_prefix).join("bin");
+            if conda_bin.exists() {
+                push_unique_path(
+                    &mut paths,
+                    &mut seen,
+                    conda_bin.to_string_lossy().to_string(),
+                );
+            }
+        }
+
+        let shell_path = &login_shell_snapshot().path;
+        for entry in shell_path.split(':').filter(|entry| !entry.is_empty()) {
+            push_unique_path(&mut paths, &mut seen, entry.to_string());
+        }
+    }
 
     if let Some(path) = get_local_cli_bin_dir() {
         push_unique_path(&mut paths, &mut seen, path.to_string_lossy().to_string());
@@ -398,11 +485,6 @@ pub(crate) fn build_enriched_path() -> String {
     {
         push_unique_path(&mut paths, &mut seen, "/opt/homebrew/bin".to_string());
         push_unique_path(&mut paths, &mut seen, "/usr/local/bin".to_string());
-
-        let shell_path = login_shell_extra_path();
-        for entry in shell_path.split(':').filter(|entry| !entry.is_empty()) {
-            push_unique_path(&mut paths, &mut seen, entry.to_string());
-        }
     }
 
     for entry in current_path
@@ -482,10 +564,39 @@ fn find_node_binary_in_path(path_env: &str) -> Option<String> {
 pub(crate) struct ClaudeRuntimeEnv {
     pub path: String,
     pub node_path: Option<String>,
+    pub inherited_env: Vec<(String, String)>,
 }
 
 pub(crate) fn resolve_claude_runtime_env(cli_path: &Path) -> Result<ClaudeRuntimeEnv, String> {
     let path = build_enriched_path();
+    let mut inherited_env = Vec::new();
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let snapshot = login_shell_snapshot();
+        if let Some(conda_prefix) = &snapshot.conda_prefix {
+            inherited_env.push(("CONDA_PREFIX".to_string(), conda_prefix.clone()));
+        }
+        if let Some(conda_default_env) = &snapshot.conda_default_env {
+            inherited_env.push(("CONDA_DEFAULT_ENV".to_string(), conda_default_env.clone()));
+        }
+        if let Some(conda_shlvl) = &snapshot.conda_shlvl {
+            inherited_env.push(("CONDA_SHLVL".to_string(), conda_shlvl.clone()));
+        }
+        if let Some(python) = &snapshot.python {
+            inherited_env.push(("AITE_LOGIN_SHELL_PYTHON".to_string(), python.clone()));
+        }
+        if let Some(python3) = &snapshot.python3 {
+            inherited_env.push(("AITE_LOGIN_SHELL_PYTHON3".to_string(), python3.clone()));
+        }
+        if let Some(pip) = &snapshot.pip {
+            inherited_env.push(("AITE_LOGIN_SHELL_PIP".to_string(), pip.clone()));
+        }
+        if let Some(pip3) = &snapshot.pip3 {
+            inherited_env.push(("AITE_LOGIN_SHELL_PIP3".to_string(), pip3.clone()));
+        }
+    }
+
     let requires_node = claude_binary_requires_node(cli_path);
     let node_path = if requires_node {
         Some(find_node_binary_in_path(&path).ok_or_else(|| {
@@ -507,7 +618,14 @@ pub(crate) fn resolve_claude_runtime_env(cli_path: &Path) -> Result<ClaudeRuntim
     if let Some(node_path) = &node_path {
         tracing::info!("Claude CLI 运行环境已解析 Node.js: {}", node_path);
     }
-    Ok(ClaudeRuntimeEnv { path, node_path })
+    if !inherited_env.is_empty() {
+        tracing::info!("Claude CLI 将继承 shell 运行快照变量: {:?}", inherited_env);
+    }
+    Ok(ClaudeRuntimeEnv {
+        path,
+        node_path,
+        inherited_env,
+    })
 }
 
 pub(crate) fn resolve_claude_binary_path() -> Result<std::path::PathBuf, String> {

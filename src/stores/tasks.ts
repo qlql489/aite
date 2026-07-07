@@ -7,6 +7,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import type { TaskItem, TaskStatus } from '../types';
 import { useClaudeStore } from './claude';
+import { sendTaskCompletionNotification } from '../lib/taskCompletionNotification';
 
 /**
  * useTasksStore - 任务管理
@@ -142,6 +143,8 @@ export const useTasksStore = defineStore('tasks', () => {
    * 完成任务
    */
   function completeTask(sessionId: string, taskId: string): void {
+    const task = getTasksForSession(sessionId).find(t => t.id === taskId);
+
     updateTask(sessionId, taskId, {
       status: 'completed',
     });
@@ -152,9 +155,19 @@ export const useTasksStore = defineStore('tasks', () => {
     // 如果任务所属的 session 不是当前选中的 session，则添加红点通知
     try {
       const claudeStore = useClaudeStore();
-      if (claudeStore.currentSessionId !== sessionId) {
+      const isCurrentSession = claudeStore.currentSessionId === sessionId;
+      const shouldSendSystemNotification =
+        !!task && (!isCurrentSession || document.visibilityState !== 'visible' || !document.hasFocus());
+
+      if (!isCurrentSession) {
         claudeStore.addUnreadTaskCompletion(sessionId);
         console.log('[Tasks] Task completed, added unread notification for session:', sessionId);
+      }
+
+      if (shouldSendSystemNotification) {
+        void sendTaskCompletionNotification(task).catch(error => {
+          console.error('[Tasks] Failed to send system notification:', error);
+        });
       }
     } catch (e) {
       console.error('[Tasks] Failed to add unread notification:', e);

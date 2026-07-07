@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, type Ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { openPath } from '@tauri-apps/plugin-opener';
 import { useSlashesStore } from '../stores/slashes';
 import { useMcpStore, type McpServer, type McpServerStatusInfo } from '../stores/mcp';
 import { useSkillsStore, type SkillFile } from '../stores/skills';
@@ -63,7 +64,7 @@ interface ProjectFileResponse {
 }
 
 // 状态
-const activeTab = ref<TabType>('command');
+const activeTab = ref<TabType>('skill');
 const slashesStore = useSlashesStore();
 const mcpStore = useMcpStore();
 const isWorkspaceMode = computed(() => props.mode === 'workspace');
@@ -149,6 +150,14 @@ const skillFindInputRef = ref<HTMLInputElement | null>(null);
 const skillTextareaRef = ref<HTMLTextAreaElement | null>(null);
 const skillHighlightLayerRef = ref<HTMLElement | null>(null);
 
+const selectedCommandDirectoryPath = computed(() => (
+  selectedCommand.value ? getParentDirectory(selectedCommand.value.filePath) : ''
+));
+
+const selectedSkillDirectoryPath = computed(() => (
+  selectedSkillRootPath.value || (selectedSkill.value ? getParentDirectory(selectedSkill.value.filePath) : '')
+));
+
 // 过滤后的 skills
 const filteredSkills = computed(() => {
   if (!skillSearch.value) return skills.value;
@@ -188,7 +197,6 @@ const skillsBySource = computed(() => {
   const grouped: Record<string, SkillFile[]> = {
     project: [],
     global: [],
-    installed: [],
     plugin: [],
   };
   for (const skill of filteredSkills.value) {
@@ -248,8 +256,8 @@ const mcpForm = ref({
 
 // Tab 配置
 const tabs = [
-  { id: 'command' as TabType, label: '命令', icon: CommandIcon },
   { id: 'skill' as TabType, label: '技能', icon: ZapIcon },
+  { id: 'command' as TabType, label: '命令', icon: CommandIcon },
   { id: 'mcp' as TabType, label: 'MCP 服务', icon: Plug01Icon },
 ];
 const visibleTabs = computed(() => tabs);
@@ -572,6 +580,17 @@ function getFilename(path: string): string {
   const normalized = path.replace(/\\/g, '/');
   const index = normalized.lastIndexOf('/');
   return index >= 0 ? normalized.slice(index + 1) : normalized;
+}
+
+async function openExtensionDirectory(path: string) {
+  if (!path) return;
+
+  try {
+    await openPath(path);
+  } catch (e) {
+    console.error('Failed to open directory:', e);
+    alert(`打开目录失败: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 function updateLocalEntry(filePath: string, content: string) {
@@ -1311,7 +1330,7 @@ function requestDeleteCommand(command: SkillFile) {
 }
 
 function requestDeleteSkill(skill: SkillFile) {
-  if (skill.source === 'plugin' || skill.source === 'installed') {
+  if (skill.source === 'plugin') {
     return;
   }
 
@@ -1738,6 +1757,19 @@ onBeforeUnmount(() => {
                     <span v-if="selectedCommand.pluginName">({{ selectedCommand.pluginName }})</span>
                   </span>
                 </div>
+                <div class="extension-path-bar">
+                  <span class="extension-path-text" :title="selectedCommandDirectoryPath">
+                    {{ selectedCommandDirectoryPath }}
+                  </span>
+                  <button
+                    type="button"
+                    class="toolbar-btn extension-path-open-btn"
+                    @click="openExtensionDirectory(selectedCommandDirectoryPath)"
+                    title="打开命令目录"
+                  >
+                    <HugeiconsIcon :icon="FolderOpenIcon" class="icon-sm" />
+                  </button>
+                </div>
                 <div class="command-editor-actions">
                   <!-- View mode toggles -->
                   <button
@@ -1933,10 +1965,6 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <!-- Footer -->
-              <div class="command-editor-footer">
-                <span class="command-file-path">{{ selectedCommand.filePath }}</span>
-              </div>
             </div>
 
             <!-- Empty state -->
@@ -2075,20 +2103,6 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <div v-if="skillsBySource.installed.length > 0" class="command-group">
-                <div class="group-header">INSTALLED</div>
-                <div v-for="skill in skillsBySource.installed" :key="skill.filePath"
-                  :class="['skill-item', { selected: selectedSkill?.filePath === skill.filePath }]"
-                  @click="selectSkill(skill)"
-                >
-                  <HugeiconsIcon :icon="ZapIcon" class="skill-item-icon" />
-                  <div class="skill-item-content">
-                    <div class="skill-item-name">/{{ skill.name }}</div>
-                    <div class="skill-item-desc">{{ skill.description || '无描述' }}</div>
-                  </div>
-                </div>
-              </div>
-
               <div v-if="skillsBySource.plugin.length > 0" class="command-group">
                 <div class="group-header">PLUGINS</div>
                 <div v-for="skill in skillsBySource.plugin" :key="skill.filePath"
@@ -2122,8 +2136,20 @@ onBeforeUnmount(() => {
                   <span :class="['command-source-badge', selectedSkill.source]">
                     {{ selectedSkill.source }}
                     <span v-if="selectedSkill.pluginName">({{ selectedSkill.pluginName }})</span>
-                    <span v-else-if="selectedSkill.installedSource">({{ selectedSkill.installedSource }})</span>
                   </span>
+                </div>
+                <div class="extension-path-bar">
+                  <span class="extension-path-text" :title="selectedSkillDirectoryPath">
+                    {{ selectedSkillDirectoryPath }}
+                  </span>
+                  <button
+                    type="button"
+                    class="toolbar-btn extension-path-open-btn"
+                    @click="openExtensionDirectory(selectedSkillDirectoryPath)"
+                    title="打开技能目录"
+                  >
+                    <HugeiconsIcon :icon="FolderOpenIcon" class="icon-sm" />
+                  </button>
                 </div>
                 <div class="skill-editor-actions">
                   <!-- View mode toggles -->
@@ -2159,7 +2185,7 @@ onBeforeUnmount(() => {
                   <!-- Delete -->
                   <button
                     type="button"
-                    v-if="!isSelectedSkillReadOnly && selectedSkill.source !== 'installed'"
+                    v-if="!isSelectedSkillReadOnly"
                     class="toolbar-btn"
                     @click.stop.prevent="requestDeleteSkill(selectedSkill)"
                     title="删除技能"
@@ -2371,10 +2397,6 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <!-- Footer -->
-              <div class="skill-editor-footer">
-                <span class="skill-file-path">{{ selectedSkillRootPath || selectedSkill.filePath }}</span>
-              </div>
             </div>
 
             <!-- Empty state -->
@@ -4355,6 +4377,7 @@ onBeforeUnmount(() => {
 .command-editor-toolbar {
   display: flex;
   align-items: center;
+  gap: 0.75rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border-color, #e5e7eb);
   flex-shrink: 0;
@@ -4364,6 +4387,30 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.extension-path-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.extension-path-text {
+  min-width: 0;
+  flex: 1;
+  font-size: 0.75rem;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+  color: var(--text-secondary, #6b7280);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.extension-path-open-btn {
+  flex-shrink: 0;
 }
 
 .command-editor-name {
@@ -4601,18 +4648,6 @@ onBeforeUnmount(() => {
   color: var(--text-secondary, #6b7280);
 }
 
-.command-editor-footer {
-  padding: 0.375rem 1rem;
-  border-top: 1px solid var(--border-color, #e5e7eb);
-  flex-shrink: 0;
-}
-
-.command-file-path {
-  font-size: 0.75rem;
-  font-family: 'SF Mono', Monaco, Consolas, monospace;
-  color: var(--text-secondary, #6b7280);
-}
-
 .command-loading {
   display: flex;
   align-items: center;
@@ -4830,7 +4865,7 @@ onBeforeUnmount(() => {
 .skill-editor-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.75rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--border-color, #e5e7eb);
   flex-shrink: 0;
@@ -4840,6 +4875,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-shrink: 0;
 }
 
 .skill-editor-name {
@@ -4861,6 +4897,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+  margin-left: auto;
 }
 
 .toolbar-btn {
@@ -5102,17 +5139,6 @@ onBeforeUnmount(() => {
   flex: 1 1 0;
   width: auto;
   min-width: 0;
-}
-
-.skill-editor-footer {
-  padding: 0.375rem 1rem;
-  border-top: 1px solid var(--border-color, #e5e7eb);
-  flex-shrink: 0;
-}
-
-.skill-file-path {
-  font-size: 0.75rem;
-  color: var(--text-secondary, #6b7280);
 }
 
 /* Create skill dialog */

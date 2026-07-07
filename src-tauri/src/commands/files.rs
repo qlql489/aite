@@ -149,7 +149,9 @@ fn dir_has_visible_entries(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn collect_directory_entries(current: &Path) -> Result<(Vec<fs::DirEntry>, Vec<fs::DirEntry>), String> {
+fn collect_directory_entries(
+    current: &Path,
+) -> Result<(Vec<fs::DirEntry>, Vec<fs::DirEntry>), String> {
     let entries = fs::read_dir(current)
         .map_err(|error| format!("Failed to read directory {}: {}", current.display(), error))?;
 

@@ -35,6 +35,7 @@ import {
   MIN_CHAT_FONT_SIZE,
   MIN_INTERFACE_FONT_SIZE,
 } from '../utils/appearance';
+import { ensureNotificationPermission } from '../lib/taskCompletionNotification';
 
 // 标签页状态
 type TabId = 'extensions' | 'providers' | 'stats' | 'general';
@@ -53,6 +54,7 @@ const themeColor = ref('#3b82f6');
 const themeMode = ref<ThemeMode>('system');
 const interfaceFontSize = ref(DEFAULT_INTERFACE_FONT_SIZE);
 const chatFontSize = ref(DEFAULT_CHAT_FONT_SIZE);
+const taskCompletionNotificationsEnabled = ref(false);
 const showThemeModeSetting = false;
 const showLanguageSetting = false;
 const loading = ref(true);
@@ -156,6 +158,15 @@ onMounted(async () => {
   } catch (error) {
     console.error('加载对话字号失败:', error);
     chatFontSize.value = applyChatFontSize(DEFAULT_CHAT_FONT_SIZE);
+  }
+
+  try {
+    const enabled = await invoke<boolean>('get_task_completion_notifications_enabled');
+    taskCompletionNotificationsEnabled.value = enabled;
+    console.log('从后端加载任务完成系统通知配置:', enabled);
+  } catch (error) {
+    console.error('加载任务完成系统通知配置失败:', error);
+    taskCompletionNotificationsEnabled.value = false;
   } finally {
     loading.value = false;
   }
@@ -235,6 +246,26 @@ async function updateChatFontSize(size: number) {
     console.log('对话字号已保存:', savedSize);
   } catch (error) {
     console.error('保存对话字号失败:', error);
+  }
+}
+
+async function onTaskCompletionNotificationToggle() {
+  const nextValue = !taskCompletionNotificationsEnabled.value;
+
+  try {
+    if (nextValue) {
+      const granted = await ensureNotificationPermission();
+      if (!granted) {
+        console.warn('系统通知权限未授予，无法启用任务完成通知');
+        return;
+      }
+    }
+
+    await invoke('set_task_completion_notifications_enabled', { enabled: nextValue });
+    taskCompletionNotificationsEnabled.value = nextValue;
+    console.log('任务完成系统通知配置已保存:', nextValue);
+  } catch (error) {
+    console.error('保存任务完成系统通知配置失败:', error);
   }
 }
 
@@ -439,6 +470,18 @@ const emit = defineEmits<{
                   {{ getPermissionModeDisplayName(mode) }} - {{ getPermissionModeDescription(mode) }}
                 </option>
               </select>
+            </div>
+            <div class="setting-item">
+              <div class="setting-info">
+                <label class="setting-label">任务完成系统通知</label>
+                <span class="setting-description">任务完成后，如果当前会话不在前台或窗口不聚焦，则发送系统通知</span>
+              </div>
+              <button
+                :class="['setting-toggle', { active: taskCompletionNotificationsEnabled, disabled: loading }]"
+                @click="!loading && onTaskCompletionNotificationToggle()"
+              >
+                <span class="toggle-slider"></span>
+              </button>
             </div>
             <div class="setting-item">
               <div class="setting-info">
