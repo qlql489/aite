@@ -396,6 +396,10 @@ pub struct AppConfig {
     #[serde(default = "default_chat_font_size")]
     pub chat_font_size: u16,
 
+    /// 任务完成时是否发送系统通知
+    #[serde(default = "default_task_completion_notifications_enabled")]
+    pub task_completion_notifications_enabled: bool,
+
     /// 全局 API 供应商列表
     #[serde(default)]
     pub providers: Vec<ApiProvider>,
@@ -425,6 +429,7 @@ impl Default for AppConfig {
             theme_mode: ThemeMode::default(),
             interface_font_size: default_interface_font_size(),
             chat_font_size: default_chat_font_size(),
+            task_completion_notifications_enabled: default_task_completion_notifications_enabled(),
             providers: Vec::new(),
             active_provider_id: None,
             inherit_system_config: default_inherit_system_config(),
@@ -452,6 +457,10 @@ fn default_interface_font_size() -> u16 {
 
 fn default_chat_font_size() -> u16 {
     14
+}
+
+fn default_task_completion_notifications_enabled() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

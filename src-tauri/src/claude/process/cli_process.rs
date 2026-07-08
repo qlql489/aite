@@ -100,6 +100,9 @@ impl ClaudeCliProcess for CliProcessManager {
         let mut cmd = build_windows_aware_claude_command(&cli_path);
         cmd.env("PATH", &runtime_env.path);
         cmd.env_remove("CLAUDECODE");
+        for (key, value) in &runtime_env.inherited_env {
+            cmd.env(key, value);
+        }
 
         if let Some(ref node_path) = runtime_env.node_path {
             info!("   Runtime Node.js: {}", node_path);

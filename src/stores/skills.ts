@@ -7,8 +7,7 @@ export interface SkillFile {
   name: string;
   description: string;
   content: string;
-  source: 'global' | 'project' | 'installed' | 'plugin';
-  installedSource?: 'agents' | 'claude';
+  source: 'global' | 'project' | 'plugin';
   filePath: string;
   pluginName?: string;
 }
@@ -47,7 +46,6 @@ export const useSkillsStore = defineStore('skills', () => {
     const grouped: Record<string, SkillFile[]> = {
       global: [],
       project: [],
-      installed: [],
       plugin: [],
     };
     for (const skill of skills.value) {

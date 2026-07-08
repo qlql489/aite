@@ -439,12 +439,15 @@ fn read_jsonl_entries(path: &Path) -> Result<Vec<serde_json::Value>, String> {
 }
 
 fn parse_tool_use_block(block: &serde_json::Value) -> Option<ToolCall> {
-    if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+    let block_type = block.get("type").and_then(|t| t.as_str());
+    if block_type != Some("tool_use") && block_type != Some("server_tool_use") {
         return None;
     }
 
     let content_payload = match block.get("content") {
-        Some(serde_json::Value::String(text)) => serde_json::from_str::<serde_json::Value>(text).ok(),
+        Some(serde_json::Value::String(text)) => {
+            serde_json::from_str::<serde_json::Value>(text).ok()
+        }
         Some(serde_json::Value::Object(map)) => Some(serde_json::Value::Object(map.clone())),
         _ => None,
     };
@@ -593,22 +596,23 @@ fn match_subagent_parent_tool(
         None
     };
 
-    let type_only_match = if exact_match.is_none() && desc_only_match.is_none() && !agent_type.is_empty()
-    {
-        pick_candidate_index(
-            candidates,
-            |candidate| candidate.agent_type == agent_type,
-            timestamp,
-        )
-    } else {
-        None
-    };
+    let type_only_match =
+        if exact_match.is_none() && desc_only_match.is_none() && !agent_type.is_empty() {
+            pick_candidate_index(
+                candidates,
+                |candidate| candidate.agent_type == agent_type,
+                timestamp,
+            )
+        } else {
+            None
+        };
 
-    let fallback_match = if exact_match.is_none() && desc_only_match.is_none() && type_only_match.is_none() {
-        pick_candidate_index(candidates, |_| true, timestamp)
-    } else {
-        None
-    };
+    let fallback_match =
+        if exact_match.is_none() && desc_only_match.is_none() && type_only_match.is_none() {
+            pick_candidate_index(candidates, |_| true, timestamp)
+        } else {
+            None
+        };
 
     let index = exact_match
         .or(desc_only_match)
@@ -674,7 +678,8 @@ fn parse_entries_into_messages(
 
                             if has_tool_result {
                                 for item in content_array {
-                                    if item.get("type").and_then(|t| t.as_str()) != Some("tool_result")
+                                    if item.get("type").and_then(|t| t.as_str())
+                                        != Some("tool_result")
                                     {
                                         continue;
                                     }
@@ -796,14 +801,13 @@ fn parse_entries_into_messages(
                             .unwrap_or("")
                             .to_string();
 
-                        let (user_content, role) =
-                            match normalize_cli_message(&user_content_raw) {
-                                Some(normalized) => normalized.role_or(MessageRole::User),
-                                None => {
-                                    debug!("Filtering out normalized message");
-                                    continue;
-                                }
-                            };
+                        let (user_content, role) = match normalize_cli_message(&user_content_raw) {
+                            Some(normalized) => normalized.role_or(MessageRole::User),
+                            None => {
+                                debug!("Filtering out normalized message");
+                                continue;
+                            }
+                        };
 
                         let attachments = parse_file_references(&user_content);
 
@@ -850,9 +854,7 @@ fn parse_entries_into_messages(
                             let text_raw = text_parts.join("\n");
 
                             let (text, role) = match normalize_cli_message(&text_raw) {
-                                Some(normalized) => {
-                                    normalized.role_or(MessageRole::Assistant)
-                                }
+                                Some(normalized) => normalized.role_or(MessageRole::Assistant),
                                 None => {
                                     debug!("Filtering out normalized assistant message");
                                     continue;
@@ -890,8 +892,7 @@ fn parse_entries_into_messages(
                                         .unwrap_or(false);
 
                                     if let Some(tool_use_id) = tool_use_id {
-                                        tool_results
-                                            .insert(tool_use_id.clone(), result_content);
+                                        tool_results.insert(tool_use_id.clone(), result_content);
                                         tool_result_errors.insert(tool_use_id, is_error);
                                     }
                                 }
@@ -923,9 +924,7 @@ fn parse_entries_into_messages(
                                 msg.tool_result_errors = Some(tool_result_errors);
                             }
                             messages.push(msg);
-                            if let Some(uuid) =
-                                json_value.get("uuid").and_then(|v| v.as_str())
-                            {
+                            if let Some(uuid) = json_value.get("uuid").and_then(|v| v.as_str()) {
                                 assistant_uuid_to_index
                                     .insert(uuid.to_string(), messages.len() - 1);
                             }
@@ -966,27 +965,24 @@ fn parse_entries_into_messages(
     }
 
     for (tool_use_id, result_content, is_error, source_assistant_uuid) in pending_tool_results {
-        let target_index = messages
-            .iter()
-            .enumerate()
-            .find_map(|(index, msg)| {
-                let matches_tool_call = msg.tool_calls.iter().any(|call| call.id == tool_use_id);
-                if matches_tool_call {
-                    return Some(index);
-                }
+        let target_index = messages.iter().enumerate().find_map(|(index, msg)| {
+            let matches_tool_call = msg.tool_calls.iter().any(|call| call.id == tool_use_id);
+            if matches_tool_call {
+                return Some(index);
+            }
 
-                let matches_source_uuid = source_assistant_uuid
-                    .as_deref()
-                    .zip(msg.checkpoint_uuid.as_deref())
-                    .map(|(source_uuid, checkpoint_uuid)| source_uuid == checkpoint_uuid)
-                    .unwrap_or(false);
+            let matches_source_uuid = source_assistant_uuid
+                .as_deref()
+                .zip(msg.checkpoint_uuid.as_deref())
+                .map(|(source_uuid, checkpoint_uuid)| source_uuid == checkpoint_uuid)
+                .unwrap_or(false);
 
-                if matches_source_uuid {
-                    Some(index)
-                } else {
-                    None
-                }
-            });
+            if matches_source_uuid {
+                Some(index)
+            } else {
+                None
+            }
+        });
 
         if let Some(idx) = target_index {
             if let Some(msg) = messages.get_mut(idx) {
@@ -1035,9 +1031,21 @@ impl SessionFileReader {
     }
 
     /// Encode a path to match Claude CLI's encoding format
-    /// Replaces "/" with "_" and then "_" with "-"
+    /// Normalize path separators and strip characters that would let Windows
+    /// treat the encoded project directory as an absolute path.
     fn encode_path(path: &str) -> String {
-        path.trim().replace('/', "_").replace('_', "-")
+        path.trim()
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii() && ch != '/' && ch != '_' && ch != ':' {
+                    ch
+                } else {
+                    '-'
+                }
+            })
+            .collect()
     }
 
     /// Get the path to a session file
@@ -1086,8 +1094,11 @@ impl SessionFileReader {
                     .ok()
                     .and_then(|content| serde_json::from_str::<SubagentMeta>(&content).ok())
                     .unwrap_or_default();
-                let subagent_parent_tool_use_id =
-                    match_subagent_parent_tool(&mut parent_candidates, &meta, first_entry_timestamp(&entries));
+                let subagent_parent_tool_use_id = match_subagent_parent_tool(
+                    &mut parent_candidates,
+                    &meta,
+                    first_entry_timestamp(&entries),
+                );
 
                 let mut subagent_messages = parse_entries_into_messages(
                     entries,
@@ -1117,7 +1128,7 @@ impl SessionFileReader {
                 "thinking" => {
                     // Skip thinking blocks for display
                 }
-                "tool_use" => {
+                "tool_use" | "server_tool_use" => {
                     // Format tool use
                     if let Some(name) = &block.name {
                         parts.push(format!("🔧 Using tool: {}", name));
@@ -1194,6 +1205,33 @@ mod tests {
     fn test_encode_path() {
         assert_eq!(SessionFileReader::encode_path("/Users/test"), "Users-test");
         assert_eq!(SessionFileReader::encode_path("Users/test"), "Users-test");
+        assert_eq!(
+            SessionFileReader::encode_path(r"C:\Users\Test\demo_project"),
+            "C--Users-Test-demo-project"
+        );
+        assert_eq!(
+            SessionFileReader::encode_path("/Users/测试/demo_project"),
+            "Users----demo-project"
+        );
+    }
+
+    #[test]
+    fn test_get_session_path_keeps_windows_project_under_claude_projects_dir() {
+        let claude_dir = PathBuf::from("/tmp/mock-claude");
+        let reader = SessionFileReader {
+            claude_dir: claude_dir.clone(),
+        };
+
+        let session_path =
+            reader.get_session_path(r"C:\Users\Test\demo_project", "session-windows-123");
+
+        assert_eq!(
+            session_path,
+            claude_dir
+                .join("projects")
+                .join("C--Users-Test-demo-project")
+                .join("session-windows-123.jsonl")
+        );
     }
 
     #[test]
@@ -1353,11 +1391,7 @@ The required parameter `skill` is missing"
         fs::write(&session_file, payload).unwrap();
 
         let subagent_meta = r#"{"agentType":"Explore","description":"探索 openclaw 架构模式"}"#;
-        fs::write(
-            subagents_dir.join("agent-a1.meta.json"),
-            subagent_meta,
-        )
-        .unwrap();
+        fs::write(subagents_dir.join("agent-a1.meta.json"), subagent_meta).unwrap();
 
         let subagent_payload = concat!(
             r#"{"parentUuid":null,"isSidechain":true,"agentId":"a1","type":"user","timestamp":"2026-04-22T05:26:57.066Z","message":{"role":"user","content":"探索 openclaw 项目的架构模式"}}"#,
@@ -1365,21 +1399,15 @@ The required parameter `skill` is missing"
             r#"{"parentUuid":"user-sub-1","isSidechain":true,"agentId":"a1","type":"assistant","timestamp":"2026-04-22T05:26:59.568Z","message":{"id":"msg_sub_1","type":"message","role":"assistant","model":"glm-4.7","content":[{"type":"text","text":"我来帮您深入探索 openclaw 项目的架构模式。"}]}}"#,
             "\n"
         );
-        fs::write(
-            subagents_dir.join("agent-a1.jsonl"),
-            subagent_payload,
-        )
-        .unwrap();
+        fs::write(subagents_dir.join("agent-a1.jsonl"), subagent_payload).unwrap();
 
         let reader = SessionFileReader { claude_dir };
         let messages = reader.load_messages(project_path, session_id).unwrap();
 
         assert_eq!(messages.len(), 5);
-        assert!(
-            messages
-                .iter()
-                .any(|message| message.parent_tool_use_id.as_deref() == Some("call_agent_1"))
-        );
+        assert!(messages
+            .iter()
+            .any(|message| message.parent_tool_use_id.as_deref() == Some("call_agent_1")));
         let parent_index = messages
             .iter()
             .position(|message| {

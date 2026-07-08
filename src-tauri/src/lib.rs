@@ -76,6 +76,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             #[cfg(not(target_os = "windows"))]
@@ -182,6 +183,8 @@ pub fn run() {
             commands::get_interface_font_size,
             commands::set_chat_font_size,
             commands::get_chat_font_size,
+            commands::set_task_completion_notifications_enabled,
+            commands::get_task_completion_notifications_enabled,
             commands::get_claude_cli_extra_args,
             commands::set_claude_cli_extra_args,
             commands::get_provider_config,
@@ -237,9 +240,9 @@ pub fn run() {
 
         tracing::info!("App exiting, cleaning up Claude sessions...");
 
-        if let Err(error) =
-            tauri::async_runtime::block_on(crate::claude::session_registry::get_session_registry().cleanup_all())
-        {
+        if let Err(error) = tauri::async_runtime::block_on(
+            crate::claude::session_registry::get_session_registry().cleanup_all(),
+        ) {
             tracing::error!("Failed to clean up Claude sessions on exit: {}", error);
         }
     });

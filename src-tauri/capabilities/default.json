@@ -5,6 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "notification:default",
     "opener:default",
     "store:allow-load",
     "store:default",

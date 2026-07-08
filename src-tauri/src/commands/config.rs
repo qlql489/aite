@@ -41,7 +41,7 @@ fn read_app_config() -> AppConfig {
             match serde_json::from_str::<AppConfig>(&content) {
                 Ok(config) => {
                     tracing::info!(
-                        "成功读取应用配置: setup_completed={}, streaming_enabled={}, debug_enabled={}, connection_mode={}, theme_color={}, theme_mode={:?}, interface_font_size={}, chat_font_size={}",
+                        "成功读取应用配置: setup_completed={}, streaming_enabled={}, debug_enabled={}, connection_mode={}, theme_color={}, theme_mode={:?}, interface_font_size={}, chat_font_size={}, task_completion_notifications_enabled={}",
                         config.setup_completed,
                         config.streaming_enabled,
                         config.debug_enabled,
@@ -49,7 +49,8 @@ fn read_app_config() -> AppConfig {
                         config.theme_color,
                         config.theme_mode,
                         config.interface_font_size,
-                        config.chat_font_size
+                        config.chat_font_size,
+                        config.task_completion_notifications_enabled
                     );
                     config
                 }
@@ -82,7 +83,7 @@ fn write_app_config(config: &AppConfig) -> Result<(), String> {
     })?;
 
     tracing::info!(
-        "成功写入应用配置: setup_completed={}, streaming_enabled={}, debug_enabled={}, connection_mode={}, theme_color={}, theme_mode={:?}, interface_font_size={}, chat_font_size={}",
+        "成功写入应用配置: setup_completed={}, streaming_enabled={}, debug_enabled={}, connection_mode={}, theme_color={}, theme_mode={:?}, interface_font_size={}, chat_font_size={}, task_completion_notifications_enabled={}",
         config.setup_completed,
         config.streaming_enabled,
         config.debug_enabled,
@@ -90,7 +91,8 @@ fn write_app_config(config: &AppConfig) -> Result<(), String> {
         config.theme_color,
         config.theme_mode,
         config.interface_font_size,
-        config.chat_font_size
+        config.chat_font_size,
+        config.task_completion_notifications_enabled
     );
     Ok(())
 }
@@ -243,6 +245,22 @@ pub fn set_chat_font_size(size: u16) -> Result<u16, String> {
 #[tauri::command]
 pub fn get_chat_font_size() -> Result<u16, String> {
     Ok(clamp_chat_font_size(read_app_config().chat_font_size))
+}
+
+#[tauri::command]
+pub fn set_task_completion_notifications_enabled(enabled: bool) -> Result<bool, String> {
+    tracing::info!("设置任务完成系统通知: {}", enabled);
+
+    let mut config = read_app_config();
+    config.task_completion_notifications_enabled = enabled;
+
+    write_app_config(&config)?;
+    Ok(enabled)
+}
+
+#[tauri::command]
+pub fn get_task_completion_notifications_enabled() -> Result<bool, String> {
+    Ok(read_app_config().task_completion_notifications_enabled)
 }
 
 #[tauri::command]

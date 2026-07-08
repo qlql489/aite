@@ -968,9 +968,13 @@ impl ClaudeSessionManager {
 
                                 // 检查是否有工具调用
                                 for block in &assist.message.content {
-                                    if let ContentBlock::ToolUse { id, name, input: _ } = block {
-                                        info!("Tool use detected: {} - {}", name, id);
-                                        // 可以在这里发送工具调用信息到前端
+                                    match block {
+                                        ContentBlock::ToolUse { id, name, input: _ }
+                                        | ContentBlock::ServerToolUse { id, name, input: _ } => {
+                                            info!("Tool use detected: {} - {}", name, id);
+                                            // 可以在这里发送工具调用信息到前端
+                                        }
+                                        _ => {}
                                     }
                                 }
                             } else {
@@ -1386,7 +1390,8 @@ impl ClaudeSessionManager {
                         media_source: None,
                     });
                 }
-                ContentBlock::ToolUse { id, name, input } => {
+                ContentBlock::ToolUse { id, name, input }
+                | ContentBlock::ServerToolUse { id, name, input } => {
                     // 保存完整的 tool_use 信息，包括 id、name 和 input
                     let tool_use_info = serde_json::json!({
                         "id": id,

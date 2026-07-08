@@ -75,7 +75,8 @@ const getStore = async (): Promise<Store> => {
       defaults: {
         projects: [],
         conversations: [],
-        expanded: []
+        expanded: [],
+        sessionTabOrder: [],
       },
       autoSave: false // 手动控制保存时机
     });
@@ -112,6 +113,7 @@ interface PersistedProjectsData {
   projects?: Project[];
   conversations?: Conversation[];
   expanded?: number[];
+  sessionTabOrder?: string[];
 }
 
 const getContextWindowForModel = (model: string): number => {
@@ -318,6 +320,7 @@ const conversations = ref<Conversation[]>([]);
 
 const isSavedDataHydrating = ref(true);
 const hasLoadedSavedData = ref(false);
+const sessionTabOrder = ref<string[]>([]);
 
 const buildEmptySaveLogEntry = (source: string) => {
   return [
@@ -382,6 +385,11 @@ const loadSavedData = async () => {
       expandedProjects.value = new Set(savedExpanded);
     }
 
+    const savedSessionTabOrder = persistedData.sessionTabOrder ?? await s.get<string[]>('sessionTabOrder');
+    if (savedSessionTabOrder) {
+      sessionTabOrder.value = savedSessionTabOrder;
+    }
+
     console.log('[Store] 数据加载完成:', {
       projects: projects.value.length,
       conversations: conversations.value.length,
@@ -412,9 +420,12 @@ const saveData = async (source = 'unknown') => {
 
     await s.set('expanded', Array.from(expandedProjects.value));
 
+    await s.set('sessionTabOrder', sessionTabOrder.value);
+
     const isEmptySave = projects.value.length === 0
       && conversations.value.length === 0
-      && expandedProjects.value.size === 0;
+      && expandedProjects.value.size === 0
+      && sessionTabOrder.value.length === 0;
 
     if (isEmptySave) {
       const logEntry = buildEmptySaveLogEntry(source);
@@ -434,7 +445,7 @@ const saveData = async (source = 'unknown') => {
 };
 
 // 监听数据变化并自动保存
-watch([projects, conversations, expandedProjects], async () => {
+watch([projects, conversations, expandedProjects, sessionTabOrder], async () => {
   if (isSavedDataHydrating.value || !hasLoadedSavedData.value) {
     return;
   }
@@ -502,9 +513,12 @@ const refreshingProjects = ref<Set<number>>(new Set()); // 正在刷新的项目
 let autoRefreshInterval: number | null = null; // 自动刷新定时器
 
 const draggedTabSessionId = ref<string | null>(null);
-const dragOverTabSessionId = ref<string | null>(null);
-const dragOverTabPosition = ref<'before' | 'after' | null>(null);
 const suppressTabClick = ref(false);
+const isTabMouseDown = ref(false);
+const isTabDragging = ref(false);
+const tabMouseDownPosition = ref<{ x: number; y: number } | null>(null);
+const draggedTabElement = ref<{ top: number; left: number; width: number; height: number } | null>(null);
+const displaySessionTabs = ref<string[]>([]);
 
 // 项目拖拽相关状态
 const draggedProjectId = ref<number | null>(null);
@@ -522,6 +536,11 @@ const projectSortMode = ref<'project' | 'time' | 'chat'>('project');
 const isProjectSortMenuOpen = ref(false);
 const projectSortMenuRef = ref<HTMLElement | null>(null);
 const projectSortButtonRef = ref<HTMLElement | null>(null);
+const isHeaderMenuOpen = ref(false);
+const headerMenuRef = ref<HTMLElement | null>(null);
+const headerMenuButtonRef = ref<HTMLElement | null>(null);
+const workingDirectoryCopied = ref(false);
+let workingDirectoryCopiedTimer: ReturnType<typeof setTimeout> | null = null;
 
 const showSidebarUpdateAction = computed(() =>
   autoUpdateEnabled.value &&
@@ -639,6 +658,33 @@ const handleProjectSortOutsideClick = (event: MouseEvent) => {
   }
 
   isProjectSortMenuOpen.value = false;
+};
+
+const clearWorkingDirectoryCopiedState = () => {
+  if (workingDirectoryCopiedTimer !== null) {
+    clearTimeout(workingDirectoryCopiedTimer);
+    workingDirectoryCopiedTimer = null;
+  }
+  workingDirectoryCopied.value = false;
+};
+
+const closeHeaderMenu = () => {
+  isHeaderMenuOpen.value = false;
+};
+
+const toggleHeaderMenu = () => {
+  isHeaderMenuOpen.value = !isHeaderMenuOpen.value;
+};
+
+const handleHeaderMenuOutsideClick = (event: MouseEvent) => {
+  if (!isHeaderMenuOpen.value) return;
+
+  const target = event.target as Node | null;
+  if (headerMenuRef.value?.contains(target) || headerMenuButtonRef.value?.contains(target)) {
+    return;
+  }
+
+  closeHeaderMenu();
 };
 
 // 监听 projects 变化，同步到 displayProjects
@@ -1773,6 +1819,52 @@ const rewindDraftVersion = ref(0);
 // 活动 Session 列表（从后端获取）
 const activeSessions = ref<string[]>([]);
 
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function mergeSessionTabOrder(visibleSessions: string[]): string[] {
+  const existingOrder = sessionTabOrder.value.filter(sessionId => visibleSessions.includes(sessionId));
+  const appendedSessions = visibleSessions.filter(sessionId => !existingOrder.includes(sessionId));
+  return [...existingOrder, ...appendedSessions];
+}
+
+function applySessionTabOrder(nextSessions: string[]) {
+  activeSessions.value = nextSessions;
+  if (!areStringArraysEqual(sessionTabOrder.value, nextSessions)) {
+    sessionTabOrder.value = [...nextSessions];
+  }
+}
+
+function getTabDropIndex(clientX: number): number {
+  const draggedSessionId = draggedTabSessionId.value;
+  if (!draggedSessionId) return 0;
+
+  const currentTabs = displaySessionTabs.value.length > 0 ? displaySessionTabs.value : activeSessions.value;
+  const draggedIndex = currentTabs.indexOf(draggedSessionId);
+  if (draggedIndex === -1) return 0;
+
+  const elements = document.querySelectorAll('.session-tab-wrapper:not(.dragging-ghost):not(.is-dragged)');
+  if (elements.length === 0) return draggedIndex;
+
+  const firstRect = elements[0]?.getBoundingClientRect();
+  const lastRect = elements[elements.length - 1]?.getBoundingClientRect();
+
+  if (firstRect && clientX < firstRect.left) return 0;
+  if (lastRect && clientX > lastRect.right) return currentTabs.length;
+
+  for (let index = 0; index < elements.length; index += 1) {
+    const rect = elements[index].getBoundingClientRect();
+    if (clientX >= rect.left && clientX <= rect.right) {
+      const insertIndex = clientX < rect.left + rect.width / 2 ? index : index + 1;
+      return insertIndex <= draggedIndex ? insertIndex : insertIndex + 1;
+    }
+  }
+
+  return draggedIndex;
+}
+
 const markSessionStoppedManually = (sessionId: string) => {
   const next = new Set(manuallyStoppedSessions.value);
   next.add(sessionId);
@@ -2671,96 +2763,106 @@ async function refreshActiveSessions() {
     console.log('[ActiveSessions] Fetching active sessions...');
     const sessions = await invoke<string[]>('get_active_sessions');
     const visibleSessions = sessions.filter(shouldExposeActiveSession);
-    const existingOrder = activeSessions.value.filter(sessionId => visibleSessions.includes(sessionId));
-    const appendedSessions = visibleSessions.filter(sessionId => !existingOrder.includes(sessionId));
-    activeSessions.value = [...existingOrder, ...appendedSessions];
+    const nextSessions = mergeSessionTabOrder(visibleSessions);
+    applySessionTabOrder(nextSessions);
     console.log('[ActiveSessions] Refreshed:', activeSessions.value, 'Count:', activeSessions.value.length);
   } catch (error) {
     console.error('[ActiveSessions] Failed to get active sessions:', error);
   }
 }
 
-function handleTabDragStart(sessionId: string, event: DragEvent) {
-  if (isDraftSessionTab(sessionId)) {
-    event.preventDefault();
-    return;
-  }
+function handleTabMouseDown(event: MouseEvent, sessionId: string) {
+  if (isDraftSessionTab(sessionId)) return;
+  if (event.button !== 0) return;
 
+  const target = event.target as HTMLElement | null;
+  if (target?.closest('button')) return;
+
+  event.preventDefault();
+
+  isTabMouseDown.value = true;
   draggedTabSessionId.value = sessionId;
-  dragOverTabSessionId.value = null;
-  dragOverTabPosition.value = null;
-  suppressTabClick.value = true;
+  tabMouseDownPosition.value = {
+    x: event.clientX,
+    y: event.clientY,
+  };
+  displaySessionTabs.value = [...activeSessions.value];
 
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', sessionId);
+  const currentTarget = event.currentTarget as HTMLElement | null;
+  const rect = currentTarget?.getBoundingClientRect();
+  if (rect) {
+    draggedTabElement.value = {
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      height: rect.height,
+    };
   }
+
+  document.addEventListener('mousemove', handleTabMouseMove, { passive: false });
+  document.addEventListener('mouseup', handleTabMouseUp);
 }
 
-function handleTabDragOver(targetSessionId: string, event: DragEvent) {
+function handleTabMouseMove(event: MouseEvent) {
   const draggedSessionId = draggedTabSessionId.value;
-  if (!draggedSessionId) return;
+  if (!isTabMouseDown.value || !draggedSessionId) return;
+
+  if (!isTabDragging.value) {
+    const startPosition = tabMouseDownPosition.value;
+    if (!startPosition) return;
+
+    const deltaX = event.clientX - startPosition.x;
+    const deltaY = event.clientY - startPosition.y;
+    const moveDistance = Math.hypot(deltaX, deltaY);
+    if (moveDistance < 6) return;
+
+    isTabDragging.value = true;
+    suppressTabClick.value = true;
+  }
 
   event.preventDefault();
 
-  if (draggedSessionId === targetSessionId) {
-    dragOverTabSessionId.value = null;
-    dragOverTabPosition.value = null;
-    return;
-  }
+  const width = draggedTabElement.value?.width || 0;
+  const height = draggedTabElement.value?.height || 38;
+  draggedTabElement.value = {
+    top: event.clientY - height / 2,
+    left: event.clientX - width / 2,
+    width,
+    height,
+  };
 
-  const tabElement = event.currentTarget as HTMLElement | null;
-  if (!tabElement) return;
+  const currentTabs = displaySessionTabs.value.length > 0 ? displaySessionTabs.value : activeSessions.value;
+  const otherTabs = currentTabs.filter(sessionId => sessionId !== draggedSessionId);
+  const newOrder = [...otherTabs];
+  newOrder.splice(getTabDropIndex(event.clientX), 0, draggedSessionId);
 
-  const { left, width } = tabElement.getBoundingClientRect();
-  const relativeX = event.clientX - left;
-  const position = relativeX < width / 2 ? 'before' : 'after';
-
-  dragOverTabSessionId.value = targetSessionId;
-  dragOverTabPosition.value = position;
-
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'move';
+  if (!areStringArraysEqual(currentTabs, newOrder)) {
+    displaySessionTabs.value = newOrder;
   }
 }
 
-function handleTabDragLeave(targetSessionId: string) {
-  if (dragOverTabSessionId.value !== targetSessionId) return;
-  dragOverTabSessionId.value = null;
-  dragOverTabPosition.value = null;
-}
-
-function handleTabDrop(targetSessionId: string, event: DragEvent) {
-  event.preventDefault();
+function handleTabMouseUp() {
+  document.removeEventListener('mousemove', handleTabMouseMove);
+  document.removeEventListener('mouseup', handleTabMouseUp);
 
   const draggedSessionId = draggedTabSessionId.value;
-  const insertPosition = dragOverTabPosition.value;
+  const newOrder = displaySessionTabs.value;
 
-  if (!draggedSessionId || draggedSessionId === targetSessionId || !insertPosition) {
-    dragOverTabSessionId.value = null;
-    dragOverTabPosition.value = null;
-    return;
+  if (isTabDragging.value && draggedSessionId && newOrder.length > 0 && !areStringArraysEqual(activeSessions.value, newOrder)) {
+    applySessionTabOrder(newOrder);
   }
 
-  const currentTabs = [...activeSessions.value];
-  const fromIndex = currentTabs.indexOf(draggedSessionId);
-  const targetIndex = currentTabs.indexOf(targetSessionId);
-
-  if (fromIndex === -1 || targetIndex === -1) {
-    draggedTabSessionId.value = null;
-    dragOverTabSessionId.value = null;
-    dragOverTabPosition.value = null;
-    return;
-  }
-
-  const [draggedTab] = currentTabs.splice(fromIndex, 1);
-  const adjustedTargetIndex = currentTabs.indexOf(targetSessionId);
-  const insertIndex = insertPosition === 'before' ? adjustedTargetIndex : adjustedTargetIndex + 1;
-  currentTabs.splice(insertIndex, 0, draggedTab);
-  activeSessions.value = currentTabs;
+  isTabMouseDown.value = false;
+  isTabDragging.value = false;
   draggedTabSessionId.value = null;
-  dragOverTabSessionId.value = null;
-  dragOverTabPosition.value = null;
+  tabMouseDownPosition.value = null;
+  draggedTabElement.value = null;
+  displaySessionTabs.value = [];
+
+  if (!suppressTabClick.value) return;
+  window.setTimeout(() => {
+    suppressTabClick.value = false;
+  }, 0);
 }
 
 function handleTabClick(sessionId: string) {
@@ -2774,15 +2876,6 @@ function handleTabClick(sessionId: string) {
   }
 
   switchToSession(sessionId);
-}
-
-function handleTabDragEnd() {
-  draggedTabSessionId.value = null;
-  dragOverTabSessionId.value = null;
-  dragOverTabPosition.value = null;
-  window.setTimeout(() => {
-    suppressTabClick.value = false;
-  }, 0);
 }
 
 // 切换到指定 Session
@@ -2857,7 +2950,7 @@ function resetChatSelection() {
 async function activateFallbackSession(removedSessionId: string, previousSessions: string[]) {
   const removedIndex = previousSessions.indexOf(removedSessionId);
   const remainingSessions = previousSessions.filter(id => id !== removedSessionId);
-  activeSessions.value = remainingSessions;
+  applySessionTabOrder(remainingSessions);
 
   const removedConversation = getSessionConversation(removedSessionId);
   const removedConversationId = removedConversation?.id;
@@ -3082,6 +3175,15 @@ const currentProjectName = computed(() => {
 const shouldShowWelcomePage = computed(() => !isSettingsVisible.value && !selectedConversation.value && activeSessions.value.length === 0);
 
 const canShowWorkspace = computed(() => Boolean(currentProject.value?.path));
+const canPinSelectedConversation = computed(() => {
+  const conversation = selectedConversation.value;
+  return Boolean(conversation && hasConversationInList(conversation.id));
+});
+const isSelectedConversationPinned = computed(() => {
+  const conversation = selectedConversation.value;
+  if (!conversation || !hasConversationInList(conversation.id)) return false;
+  return Boolean(conversations.value.find(item => item.id === conversation.id)?.pinned);
+});
 
 async function showSessionSearch(select = true) {
   isSessionSearchVisible.value = true;
@@ -3194,7 +3296,13 @@ watch(() => sessionSearchQuery.value, (value, previousValue) => {
 
 watch(() => selectedConversation.value?.id, () => {
   hideSessionSearch();
+  closeHeaderMenu();
 });
+
+watch(activeSessions, (newSessions) => {
+  if (isTabDragging.value || isTabMouseDown.value) return;
+  displaySessionTabs.value = [...newSessions];
+}, { deep: true });
 
 function persistSelectedConversationAfterFirstSend() {
   const activeConversation = selectedConversation.value;
@@ -3323,6 +3431,9 @@ const isDraftConversation = computed(() => {
 const visibleSessionTabs = computed(() => {
   if (isDraftConversation.value && selectedConversation.value) {
     return [selectedConversation.value.id];
+  }
+  if (isTabDragging.value && displaySessionTabs.value.length > 0) {
+    return displaySessionTabs.value;
   }
   return activeSessions.value;
 });
@@ -3538,9 +3649,47 @@ const copySessionFilePath = async () => {
   }
 };
 
+const copyCurrentProjectPath = async () => {
+  const projectPath = currentProject.value?.path;
+  if (!projectPath) return;
+
+  try {
+    await navigator.clipboard.writeText(projectPath);
+    clearWorkingDirectoryCopiedState();
+    workingDirectoryCopied.value = true;
+    workingDirectoryCopiedTimer = setTimeout(() => {
+      workingDirectoryCopied.value = false;
+      workingDirectoryCopiedTimer = null;
+    }, 2000);
+  } catch (error) {
+    console.error('复制工作目录失败:', error);
+  }
+};
+
+const toggleSelectedConversationPinFromHeader = async () => {
+  const conversation = selectedConversation.value;
+  if (!conversation || !hasConversationInList(conversation.id)) return;
+
+  const index = conversations.value.findIndex(item => item.id === conversation.id);
+  if (index === -1) return;
+
+  const nextPinned = !conversations.value[index].pinned;
+  conversations.value[index].pinned = nextPinned;
+
+  if (selectedConversation.value?.id === conversation.id) {
+    selectedConversation.value = {
+      ...selectedConversation.value,
+      pinned: nextPinned,
+    };
+  }
+
+  await saveData();
+};
+
 watch(
   [() => currentProject.value?.path, () => displaySessionId.value],
   () => {
+    clearWorkingDirectoryCopiedState();
     clearSessionPathCopiedState();
     refreshSessionFilePath();
   },
@@ -3672,6 +3821,7 @@ onMounted(async () => {
   window.addEventListener('keydown', handleWindowSearchShortcut);
   window.addEventListener('resize', syncWorkspacePanelWidth);
   document.addEventListener('mousedown', handleProjectSortOutsideClick);
+  document.addEventListener('mousedown', handleHeaderMenuOutsideClick);
   leftPanelWidth.value = clampLeftPanelWidth(leftPanelWidth.value);
 
   // 测试 Store 插件
@@ -4378,12 +4528,16 @@ onUnmounted(() => {
   }
 
   clearSessionPathCopiedState();
+  clearWorkingDirectoryCopiedState();
   stopSessionFileWatcher(true);
   stopResize();
   stopWorkspaceResize();
+  document.removeEventListener('mousemove', handleTabMouseMove);
+  document.removeEventListener('mouseup', handleTabMouseUp);
   window.removeEventListener('keydown', handleWindowSearchShortcut);
   window.removeEventListener('resize', syncWorkspacePanelWidth);
   document.removeEventListener('mousedown', handleProjectSortOutsideClick);
+  document.removeEventListener('mousedown', handleHeaderMenuOutsideClick);
 
   // 清理页面可见性监听器
   const handler = (window as any).__visibilityChangeHandler;
@@ -5344,45 +5498,82 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
       <!-- 选择聊天记录后显示聊天界面 -->
       <template v-else>
         <!-- Session Tab 栏（草稿会话显示初始化 tab，多会话时显示真实 tab） -->
-        <div v-if="shouldShowSessionTabs" class="session-tabs">
+        <div v-if="shouldShowSessionTabs" class="session-tabs" :class="{ dragging: isTabDragging }">
           <div
-            v-for="sessionId in visibleSessionTabs"
-            :key="sessionId"
-            :class="['session-tab', {
-              active: isDraftSessionTab(sessionId) || sessionId === currentSessionId,
-              dragging: sessionId === draggedTabSessionId,
-              'drag-over-before': sessionId === dragOverTabSessionId && dragOverTabPosition === 'before',
-              'drag-over-after': sessionId === dragOverTabSessionId && dragOverTabPosition === 'after',
-            }]"
-            :data-streaming="getTabStatusClass(sessionId) === 'streaming'"
-            :data-completion="hasTabCompletion(sessionId)"
-            :data-awaiting-approval="hasPendingPermission(sessionId)"
-            :title="getSessionTabTooltip(sessionId)"
-            :draggable="!isDraftSessionTab(sessionId)"
-            @dragstart="handleTabDragStart(sessionId, $event)"
-            @dragover="handleTabDragOver(sessionId, $event)"
-            @dragleave="handleTabDragLeave(sessionId)"
-            @drop="handleTabDrop(sessionId, $event)"
-            @dragend="handleTabDragEnd"
-            @click="handleTabClick(sessionId)"
+            v-if="isTabDragging && draggedTabElement && draggedTabSessionId"
+            class="session-tab-wrapper dragging-ghost"
+            :style="{
+              position: 'fixed',
+              top: draggedTabElement.top + 'px',
+              left: draggedTabElement.left + 'px',
+              width: draggedTabElement.width + 'px',
+              zIndex: 1000,
+              pointerEvents: 'none'
+            }"
           >
-            <span class="tab-name">{{ getSessionDisplayName(sessionId) }}</span>
-            <span
-              v-if="hasPendingPermission(sessionId)"
-              class="tab-approval-badge"
-              title="当前会话有待批准的权限申请"
+            <div
+              :class="['session-tab', {
+                active: draggedTabSessionId === currentSessionId,
+              }]"
+              :data-streaming="getTabStatusClass(draggedTabSessionId) === 'streaming'"
+              :data-completion="hasTabCompletion(draggedTabSessionId)"
+              :data-awaiting-approval="hasPendingPermission(draggedTabSessionId)"
             >
-              等待批准
-            </span>
-            <button
-              v-if="!isDraftSessionTab(sessionId)"
-              class="tab-close"
-              @click.stop="closeSession(sessionId)"
-              title="关闭此会话"
-            >
-              ×
-            </button>
+              <span class="tab-name">{{ getSessionDisplayName(draggedTabSessionId) }}</span>
+              <span
+                v-if="hasPendingPermission(draggedTabSessionId)"
+                class="tab-approval-badge"
+                title="当前会话有待批准的权限申请"
+              >
+                等待批准
+              </span>
+            </div>
           </div>
+
+          <TransitionGroup
+            name="session-tab-list"
+            tag="div"
+            class="session-tabs-container"
+          >
+            <div
+              v-for="sessionId in visibleSessionTabs"
+              :key="sessionId"
+              class="session-tab-wrapper"
+              :class="{
+                'is-dragged': sessionId === draggedTabSessionId && isTabDragging,
+              }"
+              @mousedown="handleTabMouseDown($event, sessionId)"
+            >
+              <div
+                :class="['session-tab', {
+                  active: isDraftSessionTab(sessionId) || sessionId === currentSessionId,
+                }]"
+                :data-streaming="getTabStatusClass(sessionId) === 'streaming'"
+                :data-completion="hasTabCompletion(sessionId)"
+                :data-awaiting-approval="hasPendingPermission(sessionId)"
+                :title="getSessionTabTooltip(sessionId)"
+                @click="handleTabClick(sessionId)"
+              >
+                <span class="tab-name">{{ getSessionDisplayName(sessionId) }}</span>
+                <span
+                  v-if="hasPendingPermission(sessionId)"
+                  class="tab-approval-badge"
+                  title="当前会话有待批准的权限申请"
+                >
+                  等待批准
+                </span>
+                <button
+                  v-if="!isDraftSessionTab(sessionId)"
+                  class="tab-close"
+                  @mousedown.stop
+                  @click.stop="closeSession(sessionId)"
+                  title="关闭此会话"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          </TransitionGroup>
         </div>
 
         <!-- 聊天头部 -->
@@ -5397,28 +5588,78 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
                 <span class="status-text">{{ currentConnectionStateText }}</span>
               </div>
               <div class="chat-title">
-                {{ truncatedTitle || '选择一个对话' }}
+                <span class="chat-title-text">{{ truncatedTitle || '选择一个对话' }}</span>
                 <span v-if="isPlanMode" class="mode-badge">计划模式</span>
+                <div class="chat-title-menu-wrap">
+                  <button
+                    ref="headerMenuButtonRef"
+                    type="button"
+                    class="chat-title-menu-btn"
+                    :class="{ active: isHeaderMenuOpen }"
+                    title="更多操作"
+                    aria-label="更多操作"
+                    @click="toggleHeaderMenu"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle cx="6.5" cy="12" r="1.5" fill="currentColor" />
+                      <circle cx="12" cy="12" r="1.5" fill="currentColor" />
+                      <circle cx="17.5" cy="12" r="1.5" fill="currentColor" />
+                    </svg>
+                  </button>
+
+                  <div
+                    v-if="isHeaderMenuOpen"
+                    ref="headerMenuRef"
+                    class="chat-title-menu"
+                  >
+                    <button
+                      type="button"
+                      class="chat-title-menu-item"
+                      :disabled="!canPinSelectedConversation"
+                      @click="toggleSelectedConversationPinFromHeader().then(() => closeHeaderMenu())"
+                    >
+                      <span class="chat-title-menu-item-icon" aria-hidden="true">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                          <path d="M8 4.5h8l-1.6 5.1 3.1 2.9H13v6.5l-2-1.9-2 1.9v-6.5H6.5l3.1-2.9L8 4.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                        </svg>
+                      </span>
+                      <span>{{ isSelectedConversationPinned ? '取消顶置对话' : '顶置对话' }}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="chat-title-menu-item"
+                      :disabled="!currentProject?.path"
+                      @click="copyCurrentProjectPath().then(() => closeHeaderMenu())"
+                    >
+                      <span class="chat-title-menu-item-icon" aria-hidden="true">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                          <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l2 2h5.5A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                        </svg>
+                      </span>
+                      <span>{{ workingDirectoryCopied ? '已复制工作目录' : '复制工作目录' }}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      class="chat-title-menu-item"
+                      :disabled="!sessionFilePath"
+                      @click="copySessionFilePath().then(() => closeHeaderMenu())"
+                    >
+                      <span class="chat-title-menu-item-icon" aria-hidden="true">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                          <path d="M8 4.5h7l4 4v10A1.5 1.5 0 0 1 17.5 20h-9A1.5 1.5 0 0 1 7 18.5v-12A2 2 0 0 1 9 4.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                          <path d="M15 4.5v4h4" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                        </svg>
+                      </span>
+                      <span>{{ sessionPathCopied ? '已复制历史文件地址' : '复制历史文件地址' }}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="chat-session-id-row">
               <div class="chat-session-id">{{ displaySessionId }}</div>
-              <button
-                v-if="sessionFilePath"
-                class="chat-session-copy-btn"
-                type="button"
-                :title="sessionPathCopied ? '已复制 session 文件地址' : '复制 session 文件地址'"
-                :aria-label="sessionPathCopied ? '已复制 session 文件地址' : '复制 session 文件地址'"
-                @click="copySessionFilePath"
-              >
-                <svg v-if="!sessionPathCopied" width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <rect x="9" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.8" />
-                  <path d="M7 15H6C4.89543 15 4 14.1046 4 13V6C4 4.89543 4.89543 4 6 4H13C14.1046 4 15 4.89543 15 6V7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-                </svg>
-                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path d="M20 6L9 17L4 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </button>
             </div>
           </div>
 
@@ -6659,28 +6900,78 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
 
 /* Session Tabs */
 .session-tabs {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.25rem;
   padding: 0.35rem 1rem 0;
   background: var(--bg-primary, #ffffff);
   border-bottom: 1px solid var(--border-color, #e5e7eb);
   overflow-x: auto;
   overflow-y: hidden;
   min-height: 42px;
+  position: relative;
 }
 
 .dark .session-tabs {
   background: var(--bg-primary, #111827);
 }
 
+.session-tabs-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.25rem;
+  min-width: max-content;
+}
+
+.session-tab-list-move {
+  transition: transform 0.25s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.session-tab-wrapper {
+  flex: 1 1 0;
+  min-width: 96px;
+  max-width: 156px;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: all 0.25s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.session-tab-wrapper:active {
+  cursor: grabbing;
+}
+
+.session-tab-wrapper.dragging-ghost {
+  opacity: 0.95;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+  transition: none !important;
+  pointer-events: none;
+}
+
+.session-tab-wrapper.dragging-ghost .session-tab {
+  background: var(--bg-primary, #ffffff);
+  border-color: var(--color-primary, #3b82f6);
+  color: var(--text-primary, #1f2937);
+}
+
+.dark .session-tab-wrapper.dragging-ghost .session-tab {
+  background: var(--bg-secondary, #111827);
+  color: var(--text-primary, #f9fafb);
+}
+
+.session-tab-wrapper.is-dragged {
+  opacity: 0.3 !important;
+  pointer-events: none;
+}
+
+.session-tabs.dragging,
+.session-tabs.dragging * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
 .session-tab {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  flex: 1 1 0;
-  min-width: 96px;
-  max-width: 156px;
+  width: 100%;
   height: 38px;
   margin-bottom: -1px;
   padding: 0 0.8rem;
@@ -6714,35 +7005,6 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
   border-color: var(--color-primary, #3b82f6);
   color: white;
   transform: translateY(0);
-}
-
-.session-tab.dragging {
-  opacity: 0.55;
-}
-
-.session-tab.drag-over-before,
-.session-tab.drag-over-after {
-  position: relative;
-}
-
-.session-tab.drag-over-before::before,
-.session-tab.drag-over-after::after {
-  content: '';
-  position: absolute;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--color-primary, #3b82f6);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.14);
-}
-
-.session-tab.drag-over-before::before {
-  left: -2px;
-}
-
-.session-tab.drag-over-after::after {
-  right: -2px;
 }
 
 .session-tab[data-awaiting-approval="true"] {
@@ -7158,6 +7420,93 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+}
+
+.chat-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-title-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-title-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 0.9rem;
+  background: rgba(248, 250, 252, 0.96);
+  color: var(--text-secondary, #6b7280);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.chat-title-menu-btn:hover,
+.chat-title-menu-btn.active {
+  color: var(--text-primary, #111827);
+  border-color: rgba(59, 130, 246, 0.22);
+  background: #ffffff;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+}
+
+.chat-title-menu {
+  position: absolute;
+  top: calc(100% + 0.55rem);
+  left: 0;
+  min-width: 210px;
+  max-width: min(236px, calc(100vw - 3rem));
+  padding: 0.3rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(16px);
+  z-index: 40;
+}
+
+.chat-title-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.58rem 0.72rem;
+  border: none;
+  border-radius: 0.8rem;
+  background: transparent;
+  color: var(--text-primary, #111827);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.chat-title-menu-item:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.chat-title-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chat-title-menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
+  color: var(--text-secondary, #6b7280);
 }
 
 .chat-project-name {
@@ -7523,6 +7872,38 @@ const deleteConversation = async (conv: Conversation, projectId: number, event: 
 
   .chat-title {
     color: var(--text-primary, #f9fafb);
+  }
+
+  .chat-title-menu-btn {
+    background: rgba(31, 41, 55, 0.96);
+    border-color: rgba(75, 85, 99, 0.9);
+    color: var(--text-muted, #9ca3af);
+  }
+
+  .chat-title-menu-btn:hover,
+  .chat-title-menu-btn.active {
+    background: rgba(31, 41, 55, 1);
+    color: var(--text-primary, #f9fafb);
+    border-color: rgba(96, 165, 250, 0.35);
+    box-shadow: 0 14px 32px rgba(2, 6, 23, 0.36);
+  }
+
+  .chat-title-menu {
+    background: rgba(17, 24, 39, 0.98);
+    border-color: rgba(75, 85, 99, 0.92);
+    box-shadow: 0 18px 40px rgba(2, 6, 23, 0.42);
+  }
+
+  .chat-title-menu-item {
+    color: var(--text-primary, #f9fafb);
+  }
+
+  .chat-title-menu-item:hover:not(:disabled) {
+    background: rgba(96, 165, 250, 0.12);
+  }
+
+  .chat-title-menu-item-icon {
+    color: var(--text-muted, #9ca3af);
   }
 
   .chat-project-name {

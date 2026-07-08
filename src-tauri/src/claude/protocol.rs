@@ -497,6 +497,13 @@ pub enum ContentBlock {
         input: Value,
     },
 
+    #[serde(rename = "server_tool_use")]
+    ServerToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_use_id: String,
@@ -506,9 +513,7 @@ pub enum ContentBlock {
     },
 
     #[serde(rename = "tool_reference")]
-    ToolReference {
-        tool_name: String,
-    },
+    ToolReference { tool_name: String },
 
     #[serde(rename = "thinking")]
     Thinking {
@@ -778,6 +783,29 @@ mod tests {
                 _ => panic!("Expected structured user message"),
             },
             _ => panic!("Expected user message"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_assistant_message_with_server_tool_use() {
+        let json = r#"{"type":"assistant","message":{"id":"msg_1","type":"message","role":"assistant","model":"glm-4.7","content":[{"type":"server_tool_use","id":"call_1","name":"webReader","input":{"url":"https://example.com","return_format":"markdown"}}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}},"parent_tool_use_id":null,"session_id":"session_1","uuid":"uuid_1"}"#;
+        let msg = deserialize_message(json).unwrap();
+
+        match msg {
+            SdkMessage::Assistant(assistant) => {
+                assert_eq!(assistant.message.content.len(), 1);
+                assert!(matches!(
+                    assistant.message.content[0],
+                    ContentBlock::ServerToolUse {
+                        ref id,
+                        ref name,
+                        ref input
+                    } if id == "call_1"
+                        && name == "webReader"
+                        && input.get("return_format").and_then(|value| value.as_str()) == Some("markdown")
+                ));
+            }
+            _ => panic!("Expected assistant message"),
         }
     }
 

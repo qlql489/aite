@@ -828,15 +828,16 @@ watch(() => props.rewindTurn?.messageId, () => {
 .user-content {
   padding: 0.75rem 1rem;
   border-radius: 0.75rem;
-  background-color: var(--primary-color, #3b82f6);
-  color: #ffffff;
+  background-color: #e5e7eb;
+  border: 1px solid #d1d5db;
+  color: #111827;
   max-width: 100%;
 }
 
 .user-content .message-text {
   font-size: var(--chat-font-size);
   line-height: 1.65;
-  color: #ffffff;
+  color: #111827;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -848,9 +849,9 @@ watch(() => props.rewindTurn?.messageId, () => {
   margin: 0 0.12rem;
   padding: 0.18rem 0.52rem;
   border-radius: 0.6rem;
-  background: linear-gradient(180deg, rgba(250, 244, 232, 0.98), rgba(241, 232, 214, 0.94));
-  border: 1px solid rgba(159, 128, 92, 0.26);
-  color: #5c4630;
+  background: #d1d5db;
+  border: 1px solid #cbd5e1;
+  color: #1f2937;
   font-family: 'Monaco', 'Menlo', monospace;
   font-size: 0.92em;
   font-weight: 600;
@@ -859,7 +860,7 @@ watch(() => props.rewindTurn?.messageId, () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), 0 1px 2px rgba(29, 19, 8, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
 .user-message-footer {
@@ -1007,16 +1008,16 @@ watch(() => props.rewindTurn?.messageId, () => {
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.625rem;
-  background-color: rgba(255, 255, 255, 0.14);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background-color: rgba(17, 24, 39, 0.06);
+  border: 1px solid rgba(17, 24, 39, 0.08);
   border-radius: 999px;
   font-size: 0.75rem;
-  color: #ffffff;
+  color: #111827;
   transition: all 0.15s;
 }
 
 .attachment-chip:hover {
-  background-color: rgba(255, 255, 255, 0.22);
+  background-color: rgba(17, 24, 39, 0.1);
 }
 
 .attachment-thumb {
@@ -1040,7 +1041,7 @@ watch(() => props.rewindTurn?.messageId, () => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.82);
+  color: rgba(17, 24, 39, 0.72);
 }
 
 .attachment-name {
@@ -1336,16 +1337,17 @@ watch(() => props.rewindTurn?.messageId, () => {
 
   /* 深色模式附件样式 */
   .attachment-chip {
-    background-color: rgba(255, 255, 255, 0.14);
-    color: #ffffff;
+    background-color: rgba(17, 24, 39, 0.06);
+    border-color: rgba(17, 24, 39, 0.08);
+    color: #111827;
   }
 
   .attachment-chip:hover {
-    background-color: rgba(255, 255, 255, 0.22);
+    background-color: rgba(17, 24, 39, 0.1);
   }
 
   .attachment-icon {
-    color: rgba(255, 255, 255, 0.82);
+    color: rgba(17, 24, 39, 0.72);
   }
 
   .user-message-footer {
